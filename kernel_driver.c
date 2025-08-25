@@ -632,7 +632,8 @@ static int toggle_network_interface(struct net_control *net_ctrl)
         ret = dev_open(dev, NULL);
         strcpy(net_ctrl->message, "Interface brought up");
     } else {
-        ret = dev_close(dev);
+        dev_close(dev);
+        ret = 0;
         strcpy(net_ctrl->message, "Interface brought down");
     }
     
@@ -685,7 +686,7 @@ static int unmount_filesystem(struct fs_control *fs_ctrl)
 // خطرناک: تزریق لاگ
 static int inject_kernel_log(struct log_injection *log_inj)
 {
-    int level = KERN_INFO;
+    const char *level = KERN_INFO;
     
     if (strcmp(log_inj->level, "EMERG") == 0) level = KERN_EMERG;
     else if (strcmp(log_inj->level, "ALERT") == 0) level = KERN_ALERT;
@@ -695,7 +696,7 @@ static int inject_kernel_log(struct log_injection *log_inj)
     else if (strcmp(log_inj->level, "NOTICE") == 0) level = KERN_NOTICE;
     else if (strcmp(log_inj->level, "DEBUG") == 0) level = KERN_DEBUG;
     
-    printk(level "KAPI_INJECT: %s\n", log_inj->message);
+    printk("%sKAPI_INJECT: %s\n", level, log_inj->message);
     log_inj->status = 0;
     
     return 0;
