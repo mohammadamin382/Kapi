@@ -425,7 +425,7 @@ static void get_process_info(struct process_info *proc_info, int target_pid)
     proc_info->priority = task->prio;
     proc_info->nice = task_nice(task);
     proc_info->num_threads_full = get_nr_threads(task);
-    proc_info->state = task_state_to_char(task);
+    proc_info->state = (char)task_state_to_char(task);
     proc_info->flags = task->flags;
     
     put_pid(pid_struct);
