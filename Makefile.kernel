@@ -1,0 +1,23 @@
+
+obj-m := kernel_driver.o
+
+KERNEL_DIR := /lib/modules/$(shell uname -r)/build
+PWD := $(shell pwd)
+
+all:
+	make -C $(KERNEL_DIR) M=$(PWD) modules
+
+clean:
+	make -C $(KERNEL_DIR) M=$(PWD) clean
+
+install:
+	sudo insmod kernel_driver.ko
+
+uninstall:
+	sudo rmmod kernel_driver
+
+load:
+	sudo insmod kernel_driver.ko
+	sudo chmod 666 /dev/kernel_api_exporter
+
+.PHONY: all clean install uninstall load
