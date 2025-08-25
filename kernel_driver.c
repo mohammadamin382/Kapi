@@ -37,6 +37,10 @@
 #include <linux/path.h>
 #include <linux/namei.h>
 #include <linux/mman.h>
+#include <linux/percpu_counter.h>
+#include <linux/signal.h>
+#include <linux/kmod.h>
+#include <linux/netdevice.h>
 
 #define DEVICE_NAME "kernel_api_exporter"
 #define CLASS_NAME "kapi"
@@ -58,7 +62,19 @@
 #define KAPI_GET_BLOCK_DEVICES    _IOR(KAPI_IOC_MAGIC, 12, struct block_device_info)
 #define KAPI_GET_THERMAL_INFO     _IOR(KAPI_IOC_MAGIC, 13, struct thermal_info)
 #define KAPI_READ_KERNEL_LOG      _IOR(KAPI_IOC_MAGIC, 14, struct kernel_log)
-#define KAPI_IOC_MAXNR 14
+#define KAPI_KILL_PROCESS         _IOW(KAPI_IOC_MAGIC, 15, struct process_control)
+#define KAPI_SUSPEND_PROCESS      _IOW(KAPI_IOC_MAGIC, 16, struct process_control)
+#define KAPI_RESUME_PROCESS       _IOW(KAPI_IOC_MAGIC, 17, struct process_control)
+#define KAPI_LOAD_MODULE          _IOW(KAPI_IOC_MAGIC, 18, struct module_control)
+#define KAPI_UNLOAD_MODULE        _IOW(KAPI_IOC_MAGIC, 19, struct module_control)
+#define KAPI_TOGGLE_INTERFACE     _IOW(KAPI_IOC_MAGIC, 20, struct net_control)
+#define KAPI_MOUNT_FS             _IOW(KAPI_IOC_MAGIC, 21, struct fs_control)
+#define KAPI_UMOUNT_FS            _IOW(KAPI_IOC_MAGIC, 22, struct fs_control)
+#define KAPI_INJECT_LOG           _IOW(KAPI_IOC_MAGIC, 23, struct log_injection)
+#define KAPI_FORCE_PAGE_RECLAIM   _IO(KAPI_IOC_MAGIC, 24)
+#define KAPI_SET_CPU_AFFINITY     _IOW(KAPI_IOC_MAGIC, 25, struct cpu_control)
+#define KAPI_PANIC_KERNEL         _IO(KAPI_IOC_MAGIC, 26)
+#define KAPI_IOC_MAXNR 26
 
 // Data structures for communication
 struct memory_info {
@@ -249,6 +265,50 @@ struct kernel_log {
     char facility[32];
 };
 
+struct process_control {
+    int pid;
+    int signal;
+    int status;
+    char message[256];
+};
+
+struct module_control {
+    char path[256];
+    char name[64];
+    char params[256];
+    int status;
+    char message[256];
+};
+
+struct net_control {
+    char interface[16];
+    int up;
+    int status;
+    char message[256];
+};
+
+struct fs_control {
+    char device[128];
+    char path[256];
+    char type[32];
+    char options[256];
+    int status;
+    char message[256];
+};
+
+struct log_injection {
+    char level[16];
+    char message[512];
+    int status;
+};
+
+struct cpu_control {
+    int pid;
+    unsigned long mask;
+    int status;
+    char message[256];
+};
+
 // Global variables
 static int major_number;
 static struct class* kapi_class = NULL;
@@ -293,7 +353,7 @@ static void get_memory_info(struct memory_info *mem_info)
                      global_node_page_state(NR_SLAB_UNRECLAIMABLE_B);
     mem_info->page_tables = global_node_page_state(NR_PAGETABLE);
     mem_info->vmalloc_used = 0; // Simplified
-    mem_info->committed_as = READ_ONCE(vm_committed_as);
+    mem_info->committed_as = percpu_counter_sum_positive(&vm_committed_as);
     mem_info->dirty = global_node_page_state(NR_FILE_DIRTY) << PAGE_SHIFT;
     mem_info->writeback = global_node_page_state(NR_WRITEBACK) << PAGE_SHIFT;
     mem_info->anon_pages = global_node_page_state(NR_ANON_MAPPED) << PAGE_SHIFT;
@@ -442,6 +502,263 @@ static void get_kernel_config(struct kernel_config *config)
     
     strncpy(config->arch, init_uts_ns.name.machine, sizeof(config->arch) - 1);
     config->arch[sizeof(config->arch) - 1] = '\0';
+}
+
+// خطرناک: کنترل پروسه‌ها
+static int kill_process_by_pid(struct process_control *ctrl)
+{
+    struct task_struct *task;
+    struct pid *pid_struct;
+    int ret = 0;
+    
+    pid_struct = find_get_pid(ctrl->pid);
+    if (!pid_struct) {
+        ctrl->status = -ESRCH;
+        strcpy(ctrl->message, "Process not found");
+        return -ESRCH;
+    }
+    
+    task = pid_task(pid_struct, PIDTYPE_PID);
+    if (!task) {
+        put_pid(pid_struct);
+        ctrl->status = -ESRCH;
+        strcpy(ctrl->message, "Task not found");
+        return -ESRCH;
+    }
+    
+    ret = send_sig(ctrl->signal, task, 0);
+    ctrl->status = ret;
+    if (ret == 0) {
+        snprintf(ctrl->message, sizeof(ctrl->message), 
+                "Signal %d sent to PID %d", ctrl->signal, ctrl->pid);
+    } else {
+        snprintf(ctrl->message, sizeof(ctrl->message), 
+                "Failed to send signal: %d", ret);
+    }
+    
+    put_pid(pid_struct);
+    return ret;
+}
+
+static int suspend_resume_process(struct process_control *ctrl, bool suspend)
+{
+    struct task_struct *task;
+    struct pid *pid_struct;
+    int ret = 0;
+    
+    pid_struct = find_get_pid(ctrl->pid);
+    if (!pid_struct) {
+        ctrl->status = -ESRCH;
+        strcpy(ctrl->message, "Process not found");
+        return -ESRCH;
+    }
+    
+    task = pid_task(pid_struct, PIDTYPE_PID);
+    if (!task) {
+        put_pid(pid_struct);
+        ctrl->status = -ESRCH;
+        strcpy(ctrl->message, "Task not found");
+        return -ESRCH;
+    }
+    
+    if (suspend) {
+        ret = send_sig(SIGSTOP, task, 0);
+        strcpy(ctrl->message, suspend ? "Process suspended" : "Process resumed");
+    } else {
+        ret = send_sig(SIGCONT, task, 0);
+        strcpy(ctrl->message, "Process resumed");
+    }
+    
+    ctrl->status = ret;
+    put_pid(pid_struct);
+    return ret;
+}
+
+// خطرناک: مدیریت ماژول‌ها
+static int load_kernel_module(struct module_control *mod_ctrl)
+{
+    char *argv[] = { "/sbin/insmod", mod_ctrl->path, mod_ctrl->params, NULL };
+    char *envp[] = { "HOME=/", "PATH=/sbin:/bin:/usr/bin", NULL };
+    int ret;
+    
+    ret = call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
+    mod_ctrl->status = ret;
+    
+    if (ret == 0) {
+        snprintf(mod_ctrl->message, sizeof(mod_ctrl->message), 
+                "Module %s loaded successfully", mod_ctrl->path);
+    } else {
+        snprintf(mod_ctrl->message, sizeof(mod_ctrl->message), 
+                "Failed to load module %s: %d", mod_ctrl->path, ret);
+    }
+    
+    return ret;
+}
+
+static int unload_kernel_module(struct module_control *mod_ctrl)
+{
+    char *argv[] = { "/sbin/rmmod", mod_ctrl->name, NULL };
+    char *envp[] = { "HOME=/", "PATH=/sbin:/bin:/usr/bin", NULL };
+    int ret;
+    
+    ret = call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
+    mod_ctrl->status = ret;
+    
+    if (ret == 0) {
+        snprintf(mod_ctrl->message, sizeof(mod_ctrl->message), 
+                "Module %s unloaded successfully", mod_ctrl->name);
+    } else {
+        snprintf(mod_ctrl->message, sizeof(mod_ctrl->message), 
+                "Failed to unload module %s: %d", mod_ctrl->name, ret);
+    }
+    
+    return ret;
+}
+
+// خطرناک: کنترل شبکه
+static int toggle_network_interface(struct net_control *net_ctrl)
+{
+    struct net_device *dev;
+    int ret = 0;
+    
+    dev = dev_get_by_name(&init_net, net_ctrl->interface);
+    if (!dev) {
+        net_ctrl->status = -ENODEV;
+        strcpy(net_ctrl->message, "Network interface not found");
+        return -ENODEV;
+    }
+    
+    if (net_ctrl->up) {
+        ret = dev_open(dev, NULL);
+        strcpy(net_ctrl->message, "Interface brought up");
+    } else {
+        ret = dev_close(dev);
+        strcpy(net_ctrl->message, "Interface brought down");
+    }
+    
+    net_ctrl->status = ret;
+    dev_put(dev);
+    return ret;
+}
+
+// خطرناک: فایل‌سیستم
+static int mount_filesystem(struct fs_control *fs_ctrl)
+{
+    char *argv[] = { "/bin/mount", "-t", fs_ctrl->type, fs_ctrl->device, fs_ctrl->path, NULL };
+    char *envp[] = { "HOME=/", "PATH=/sbin:/bin:/usr/bin", NULL };
+    int ret;
+    
+    ret = call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
+    fs_ctrl->status = ret;
+    
+    if (ret == 0) {
+        snprintf(fs_ctrl->message, sizeof(fs_ctrl->message), 
+                "Mounted %s on %s", fs_ctrl->device, fs_ctrl->path);
+    } else {
+        snprintf(fs_ctrl->message, sizeof(fs_ctrl->message), 
+                "Failed to mount %s: %d", fs_ctrl->device, ret);
+    }
+    
+    return ret;
+}
+
+static int unmount_filesystem(struct fs_control *fs_ctrl)
+{
+    char *argv[] = { "/bin/umount", fs_ctrl->path, NULL };
+    char *envp[] = { "HOME=/", "PATH=/sbin:/bin:/usr/bin", NULL };
+    int ret;
+    
+    ret = call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
+    fs_ctrl->status = ret;
+    
+    if (ret == 0) {
+        snprintf(fs_ctrl->message, sizeof(fs_ctrl->message), 
+                "Unmounted %s", fs_ctrl->path);
+    } else {
+        snprintf(fs_ctrl->message, sizeof(fs_ctrl->message), 
+                "Failed to unmount %s: %d", fs_ctrl->path, ret);
+    }
+    
+    return ret;
+}
+
+// خطرناک: تزریق لاگ
+static int inject_kernel_log(struct log_injection *log_inj)
+{
+    int level = KERN_INFO;
+    
+    if (strcmp(log_inj->level, "EMERG") == 0) level = KERN_EMERG;
+    else if (strcmp(log_inj->level, "ALERT") == 0) level = KERN_ALERT;
+    else if (strcmp(log_inj->level, "CRIT") == 0) level = KERN_CRIT;
+    else if (strcmp(log_inj->level, "ERR") == 0) level = KERN_ERR;
+    else if (strcmp(log_inj->level, "WARNING") == 0) level = KERN_WARNING;
+    else if (strcmp(log_inj->level, "NOTICE") == 0) level = KERN_NOTICE;
+    else if (strcmp(log_inj->level, "DEBUG") == 0) level = KERN_DEBUG;
+    
+    printk(level "KAPI_INJECT: %s\n", log_inj->message);
+    log_inj->status = 0;
+    
+    return 0;
+}
+
+// خطرناک: فورس page reclaim
+static int force_memory_reclaim(void)
+{
+    // این تابع خیلی خطرناکه - ممکنه سیستم hang کنه
+    // استفاده از iterate_supers برای force flush
+    // در صورت امکان صفحات cache رو پاک می‌کنه
+    printk(KERN_WARNING "KAPI: Force memory reclaim triggered - system may become unresponsive!\n");
+    
+    // ساده‌شده: فقط یه اخطار می‌ده
+    // تابع واقعی خیلی خطرناک هست
+    return 0;
+}
+
+// خطرناک: CPU affinity
+static int set_process_cpu_affinity(struct cpu_control *cpu_ctrl)
+{
+    struct task_struct *task;
+    struct pid *pid_struct;
+    cpumask_t new_mask;
+    int ret = 0;
+    
+    pid_struct = find_get_pid(cpu_ctrl->pid);
+    if (!pid_struct) {
+        cpu_ctrl->status = -ESRCH;
+        strcpy(cpu_ctrl->message, "Process not found");
+        return -ESRCH;
+    }
+    
+    task = pid_task(pid_struct, PIDTYPE_PID);
+    if (!task) {
+        put_pid(pid_struct);
+        cpu_ctrl->status = -ESRCH;
+        strcpy(cpu_ctrl->message, "Task not found");
+        return -ESRCH;
+    }
+    
+    cpumask_clear(&new_mask);
+    cpumask_copy(&new_mask, (cpumask_t *)&cpu_ctrl->mask);
+    
+    ret = set_cpus_allowed_ptr(task, &new_mask);
+    cpu_ctrl->status = ret;
+    
+    if (ret == 0) {
+        snprintf(cpu_ctrl->message, sizeof(cpu_ctrl->message), 
+                "CPU affinity set for PID %d", cpu_ctrl->pid);
+    } else {
+        snprintf(cpu_ctrl->message, sizeof(cpu_ctrl->message), 
+                "Failed to set CPU affinity: %d", ret);
+    }
+    
+    put_pid(pid_struct);
+    return ret;
+}
+
+// خطرناک ترین: Kernel Panic! 💀
+static void trigger_kernel_panic(void)
+{
+    panic("KAPI: Deliberate kernel panic triggered by user! 💀");
 }
 
 static int execute_kernel_command(struct kernel_cmd *cmd)
@@ -612,6 +929,143 @@ static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             if (copy_to_user((struct kernel_config *)arg, &config, sizeof(config)))
                 retval = -EFAULT;
             break;
+            
+        // خطرناک: کنترل پروسه‌ها
+        case KAPI_KILL_PROCESS: {
+            struct process_control proc_ctrl;
+            if (copy_from_user(&proc_ctrl, (void *)arg, sizeof(proc_ctrl))) {
+                retval = -EFAULT;
+                break;
+            }
+            kill_process_by_pid(&proc_ctrl);
+            if (copy_to_user((void *)arg, &proc_ctrl, sizeof(proc_ctrl)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        case KAPI_SUSPEND_PROCESS: {
+            struct process_control proc_ctrl;
+            if (copy_from_user(&proc_ctrl, (void *)arg, sizeof(proc_ctrl))) {
+                retval = -EFAULT;
+                break;
+            }
+            suspend_resume_process(&proc_ctrl, true);
+            if (copy_to_user((void *)arg, &proc_ctrl, sizeof(proc_ctrl)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        case KAPI_RESUME_PROCESS: {
+            struct process_control proc_ctrl;
+            if (copy_from_user(&proc_ctrl, (void *)arg, sizeof(proc_ctrl))) {
+                retval = -EFAULT;
+                break;
+            }
+            suspend_resume_process(&proc_ctrl, false);
+            if (copy_to_user((void *)arg, &proc_ctrl, sizeof(proc_ctrl)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        // خطرناک: مدیریت ماژول‌ها
+        case KAPI_LOAD_MODULE: {
+            struct module_control mod_ctrl;
+            if (copy_from_user(&mod_ctrl, (void *)arg, sizeof(mod_ctrl))) {
+                retval = -EFAULT;
+                break;
+            }
+            load_kernel_module(&mod_ctrl);
+            if (copy_to_user((void *)arg, &mod_ctrl, sizeof(mod_ctrl)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        case KAPI_UNLOAD_MODULE: {
+            struct module_control mod_ctrl;
+            if (copy_from_user(&mod_ctrl, (void *)arg, sizeof(mod_ctrl))) {
+                retval = -EFAULT;
+                break;
+            }
+            unload_kernel_module(&mod_ctrl);
+            if (copy_to_user((void *)arg, &mod_ctrl, sizeof(mod_ctrl)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        // خطرناک: شبکه
+        case KAPI_TOGGLE_INTERFACE: {
+            struct net_control net_ctrl;
+            if (copy_from_user(&net_ctrl, (void *)arg, sizeof(net_ctrl))) {
+                retval = -EFAULT;
+                break;
+            }
+            toggle_network_interface(&net_ctrl);
+            if (copy_to_user((void *)arg, &net_ctrl, sizeof(net_ctrl)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        // خطرناک: فایل‌سیستم
+        case KAPI_MOUNT_FS: {
+            struct fs_control fs_ctrl;
+            if (copy_from_user(&fs_ctrl, (void *)arg, sizeof(fs_ctrl))) {
+                retval = -EFAULT;
+                break;
+            }
+            mount_filesystem(&fs_ctrl);
+            if (copy_to_user((void *)arg, &fs_ctrl, sizeof(fs_ctrl)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        case KAPI_UMOUNT_FS: {
+            struct fs_control fs_ctrl;
+            if (copy_from_user(&fs_ctrl, (void *)arg, sizeof(fs_ctrl))) {
+                retval = -EFAULT;
+                break;
+            }
+            unmount_filesystem(&fs_ctrl);
+            if (copy_to_user((void *)arg, &fs_ctrl, sizeof(fs_ctrl)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        // خطرناک: تزریق لاگ
+        case KAPI_INJECT_LOG: {
+            struct log_injection log_inj;
+            if (copy_from_user(&log_inj, (void *)arg, sizeof(log_inj))) {
+                retval = -EFAULT;
+                break;
+            }
+            inject_kernel_log(&log_inj);
+            if (copy_to_user((void *)arg, &log_inj, sizeof(log_inj)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        // خطرناک: فورس memory reclaim
+        case KAPI_FORCE_PAGE_RECLAIM:
+            retval = force_memory_reclaim();
+            break;
+            
+        // خطرناک: CPU affinity
+        case KAPI_SET_CPU_AFFINITY: {
+            struct cpu_control cpu_ctrl;
+            if (copy_from_user(&cpu_ctrl, (void *)arg, sizeof(cpu_ctrl))) {
+                retval = -EFAULT;
+                break;
+            }
+            set_process_cpu_affinity(&cpu_ctrl);
+            if (copy_to_user((void *)arg, &cpu_ctrl, sizeof(cpu_ctrl)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        // خطرناک ترین: Kernel Panic! 💀
+        case KAPI_PANIC_KERNEL:
+            printk(KERN_CRIT "KAPI: User requested kernel panic! System going down...\n");
+            trigger_kernel_panic();
+            break; // هرگز اینجا نمی‌رسه 😅
             
         default:
             retval = -ENOTTY;
