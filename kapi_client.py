@@ -1,8 +1,8 @@
 
 #!/usr/bin/env python3
 """
-Kernel API Client - Python userland interface for the kernel driver
-This module provides a high-level interface to communicate with the kernel driver
+Kernel API Client v2.0 - Advanced Python userland interface for the kernel driver
+This module provides a comprehensive interface to communicate with the enhanced kernel driver
 """
 
 import os
@@ -12,23 +12,29 @@ import fcntl
 import mmap
 import socket
 import time
+import json
 from ctypes import *
+from datetime import datetime
 
 # Device path
 DEVICE_PATH = "/dev/kernel_api_exporter"
 
 # IOCTL commands (must match kernel driver)
 KAPI_IOC_MAGIC = ord('k')
-KAPI_GET_MEMORY_INFO = (2 << 30) | (KAPI_IOC_MAGIC << 8) | 1 | (0 << 16)
-KAPI_GET_CPU_INFO = (2 << 30) | (KAPI_IOC_MAGIC << 8) | 2 | (0 << 16)
-KAPI_GET_PROCESS_INFO = (3 << 30) | (KAPI_IOC_MAGIC << 8) | 3 | (0 << 16)
-KAPI_EXECUTE_KERNEL_CMD = (3 << 30) | (KAPI_IOC_MAGIC << 8) | 4 | (0 << 16)
-KAPI_GET_NETWORK_STATS = (2 << 30) | (KAPI_IOC_MAGIC << 8) | 5 | (0 << 16)
+
+def _IOC(direction, magic, number, size):
+    return (direction << 30) | (magic << 8) | number | (size << 16)
+
+def _IOR(magic, number, struct_type):
+    return _IOC(2, magic, number, sizeof(struct_type))
+
+def _IOWR(magic, number, struct_type):
+    return _IOC(3, magic, number, sizeof(struct_type))
 
 # Netlink constants
 NETLINK_USER = 31
 
-# Data structures (must match kernel structures)
+# Enhanced data structures (must match kernel structures)
 class MemoryInfo(Structure):
     _fields_ = [
         ("total_ram", c_ulong),
@@ -38,15 +44,35 @@ class MemoryInfo(Structure):
         ("cached", c_ulong),
         ("swap_total", c_ulong),
         ("swap_free", c_ulong),
+        ("slab", c_ulong),
+        ("page_tables", c_ulong),
+        ("vmalloc_used", c_ulong),
+        ("committed_as", c_ulong),
+        ("dirty", c_ulong),
+        ("writeback", c_ulong),
+        ("anon_pages", c_ulong),
+        ("mapped", c_ulong),
+        ("shmem", c_ulong),
     ]
 
 class CPUInfo(Structure):
     _fields_ = [
         ("num_cpus", c_uint),
+        ("num_online_cpus", c_uint),
         ("cpu_freq", c_ulong),
         ("cpu_model", c_char * 64),
         ("uptime", c_ulong),
         ("idle_time", c_ulong),
+        ("user_time", c_ulong),
+        ("system_time", c_ulong),
+        ("iowait_time", c_ulong),
+        ("irq_time", c_ulong),
+        ("softirq_time", c_ulong),
+        ("guest_time", c_ulong),
+        ("cache_size", c_uint),
+        ("cache_alignment", c_uint),
+        ("vendor_id", c_char * 16),
+        ("cpu_family", c_char * 16),
     ]
 
 class ProcessInfo(Structure):
@@ -56,6 +82,19 @@ class ProcessInfo(Structure):
         ("memory_usage", c_ulong),
         ("cpu_usage", c_uint),
         ("num_threads", c_int),
+        ("ppid", c_int),
+        ("pgrp", c_int),
+        ("session", c_int),
+        ("tty_nr", c_int),
+        ("start_time", c_ulong),
+        ("vsize", c_ulong),
+        ("rss", c_long),
+        ("rsslim", c_ulong),
+        ("priority", c_ulong),
+        ("nice", c_long),
+        ("num_threads_full", c_ulong),
+        ("state", c_char),
+        ("flags", c_uint),
     ]
 
 class KernelCmd(Structure):
@@ -73,36 +112,116 @@ class NetworkStats(Structure):
         ("tx_bytes", c_ulong),
         ("rx_errors", c_ulong),
         ("tx_errors", c_ulong),
+        ("rx_dropped", c_ulong),
+        ("tx_dropped", c_ulong),
+        ("multicast", c_ulong),
+        ("collisions", c_ulong),
+        ("rx_length_errors", c_ulong),
+        ("rx_over_errors", c_ulong),
+        ("rx_crc_errors", c_ulong),
+        ("rx_frame_errors", c_ulong),
+        ("rx_fifo_errors", c_ulong),
+        ("rx_missed_errors", c_ulong),
+        ("tx_aborted_errors", c_ulong),
+        ("tx_carrier_errors", c_ulong),
+        ("tx_fifo_errors", c_ulong),
+        ("tx_heartbeat_errors", c_ulong),
+        ("tx_window_errors", c_ulong),
     ]
 
+class FilesystemInfo(Structure):
+    _fields_ = [
+        ("fs_type", c_char * 32),
+        ("total_blocks", c_ulong),
+        ("free_blocks", c_ulong),
+        ("available_blocks", c_ulong),
+        ("total_inodes", c_ulong),
+        ("free_inodes", c_ulong),
+        ("block_size", c_ulong),
+        ("max_filename_len", c_ulong),
+        ("mount_point", c_char * 256),
+        ("device_name", c_char * 64),
+        ("flags", c_ulong),
+    ]
+
+class LoadAvgInfo(Structure):
+    _fields_ = [
+        ("load1", c_ulong),
+        ("load5", c_ulong),
+        ("load15", c_ulong),
+        ("running_tasks", c_ulong),
+        ("total_tasks", c_ulong),
+        ("last_pid", c_ulong),
+    ]
+
+class KernelConfig(Structure):
+    _fields_ = [
+        ("version", c_char * 64),
+        ("compile_time", c_char * 64),
+        ("compile_by", c_char * 64),
+        ("compile_host", c_char * 64),
+        ("compiler", c_char * 64),
+        ("build_date", c_char * 64),
+        ("hz", c_ulong),
+        ("page_size", c_ulong),
+        ("phys_addr_bits", c_ulong),
+        ("virt_addr_bits", c_ulong),
+        ("arch", c_char * 32),
+    ]
+
+# IOCTL command definitions
+KAPI_GET_MEMORY_INFO = _IOR(KAPI_IOC_MAGIC, 1, MemoryInfo)
+KAPI_GET_CPU_INFO = _IOR(KAPI_IOC_MAGIC, 2, CPUInfo)
+KAPI_GET_PROCESS_INFO = _IOWR(KAPI_IOC_MAGIC, 3, ProcessInfo)
+KAPI_EXECUTE_KERNEL_CMD = _IOWR(KAPI_IOC_MAGIC, 4, KernelCmd)
+KAPI_GET_NETWORK_STATS = _IOR(KAPI_IOC_MAGIC, 5, NetworkStats)
+KAPI_GET_FILE_SYSTEM_INFO = _IOR(KAPI_IOC_MAGIC, 6, FilesystemInfo)
+KAPI_GET_LOADAVG = _IOR(KAPI_IOC_MAGIC, 9, LoadAvgInfo)
+KAPI_GET_KERNEL_CONFIG = _IOR(KAPI_IOC_MAGIC, 10, KernelConfig)
+
 class KernelAPIClient:
-    """Main client class for communicating with the kernel driver"""
+    """Enhanced client class for communicating with the kernel driver"""
     
     def __init__(self):
         self.device_fd = None
         self.netlink_socket = None
         self.shared_memory = None
+        self.connected = False
         
     def connect(self):
         """Connect to the kernel driver"""
         try:
+            # Check if device exists
+            if not os.path.exists(DEVICE_PATH):
+                print(f"Device {DEVICE_PATH} not found. Make sure the kernel module is loaded.")
+                return False
+            
             # Open character device
             self.device_fd = os.open(DEVICE_PATH, os.O_RDWR)
-            print(f"Connected to kernel driver at {DEVICE_PATH}")
+            print(f"✓ Connected to kernel driver at {DEVICE_PATH}")
             
             # Create netlink socket
-            self.netlink_socket = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, NETLINK_USER)
-            self.netlink_socket.bind((os.getpid(), 0))
-            print("Netlink socket created")
+            try:
+                self.netlink_socket = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, NETLINK_USER)
+                self.netlink_socket.bind((os.getpid(), 0))
+                print("✓ Netlink socket created")
+            except Exception as e:
+                print(f"⚠ Netlink socket creation failed: {e}")
+                self.netlink_socket = None
             
-            # Memory map the device
-            self.shared_memory = mmap.mmap(self.device_fd, 4096, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE)
-            print("Memory mapped device buffer")
+            # Memory map the device (16KB buffer)
+            try:
+                self.shared_memory = mmap.mmap(self.device_fd, 16384, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE)
+                print("✓ Memory mapped device buffer (16KB)")
+            except Exception as e:
+                print(f"⚠ Memory mapping failed: {e}")
+                self.shared_memory = None
             
+            self.connected = True
             return True
             
         except Exception as e:
-            print(f"Failed to connect to kernel driver: {e}")
+            print(f"✗ Failed to connect to kernel driver: {e}")
             self.disconnect()
             return False
     
@@ -120,11 +239,16 @@ class KernelAPIClient:
             os.close(self.device_fd)
             self.device_fd = None
             
-        print("Disconnected from kernel driver")
+        self.connected = False
+        print("✓ Disconnected from kernel driver")
+    
+    def is_connected(self):
+        """Check if connected to the kernel driver"""
+        return self.connected and self.device_fd is not None
     
     def get_memory_info(self):
-        """Get system memory information"""
-        if not self.device_fd:
+        """Get comprehensive system memory information"""
+        if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
         
         mem_info = MemoryInfo()
@@ -138,13 +262,22 @@ class KernelAPIClient:
                 'cached': mem_info.cached,
                 'swap_total': mem_info.swap_total,
                 'swap_free': mem_info.swap_free,
+                'slab': mem_info.slab,
+                'page_tables': mem_info.page_tables,
+                'vmalloc_used': mem_info.vmalloc_used,
+                'committed_as': mem_info.committed_as,
+                'dirty': mem_info.dirty,
+                'writeback': mem_info.writeback,
+                'anon_pages': mem_info.anon_pages,
+                'mapped': mem_info.mapped,
+                'shmem': mem_info.shmem,
             }
         except OSError as e:
             raise RuntimeError(f"Failed to get memory info: {e}")
     
     def get_cpu_info(self):
-        """Get CPU information"""
-        if not self.device_fd:
+        """Get comprehensive CPU information"""
+        if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
         
         cpu_info = CPUInfo()
@@ -152,17 +285,28 @@ class KernelAPIClient:
             fcntl.ioctl(self.device_fd, KAPI_GET_CPU_INFO, cpu_info)
             return {
                 'num_cpus': cpu_info.num_cpus,
+                'num_online_cpus': cpu_info.num_online_cpus,
                 'cpu_freq': cpu_info.cpu_freq,
-                'cpu_model': cpu_info.cpu_model.decode('utf-8'),
+                'cpu_model': cpu_info.cpu_model.decode('utf-8').strip('\x00'),
                 'uptime': cpu_info.uptime,
                 'idle_time': cpu_info.idle_time,
+                'user_time': cpu_info.user_time,
+                'system_time': cpu_info.system_time,
+                'iowait_time': cpu_info.iowait_time,
+                'irq_time': cpu_info.irq_time,
+                'softirq_time': cpu_info.softirq_time,
+                'guest_time': cpu_info.guest_time,
+                'cache_size': cpu_info.cache_size,
+                'cache_alignment': cpu_info.cache_alignment,
+                'vendor_id': cpu_info.vendor_id.decode('utf-8').strip('\x00'),
+                'cpu_family': cpu_info.cpu_family.decode('utf-8').strip('\x00'),
             }
         except OSError as e:
             raise RuntimeError(f"Failed to get CPU info: {e}")
     
     def get_process_info(self, pid):
-        """Get information about a specific process"""
-        if not self.device_fd:
+        """Get comprehensive information about a specific process"""
+        if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
         
         proc_info = ProcessInfo()
@@ -175,17 +319,30 @@ class KernelAPIClient:
                 
             return {
                 'pid': proc_info.pid,
-                'comm': proc_info.comm.decode('utf-8'),
+                'comm': proc_info.comm.decode('utf-8').strip('\x00'),
                 'memory_usage': proc_info.memory_usage,
                 'cpu_usage': proc_info.cpu_usage,
                 'num_threads': proc_info.num_threads,
+                'ppid': proc_info.ppid,
+                'pgrp': proc_info.pgrp,
+                'session': proc_info.session,
+                'tty_nr': proc_info.tty_nr,
+                'start_time': proc_info.start_time,
+                'vsize': proc_info.vsize,
+                'rss': proc_info.rss,
+                'rsslim': proc_info.rsslim,
+                'priority': proc_info.priority,
+                'nice': proc_info.nice,
+                'num_threads_full': proc_info.num_threads_full,
+                'state': chr(proc_info.state) if proc_info.state else 'U',
+                'flags': proc_info.flags,
             }
         except OSError as e:
             raise RuntimeError(f"Failed to get process info: {e}")
     
     def execute_kernel_command(self, command):
         """Execute a command in kernel space"""
-        if not self.device_fd:
+        if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
         
         kernel_cmd = KernelCmd()
@@ -194,16 +351,16 @@ class KernelAPIClient:
         try:
             fcntl.ioctl(self.device_fd, KAPI_EXECUTE_KERNEL_CMD, kernel_cmd)
             return {
-                'command': kernel_cmd.command.decode('utf-8'),
-                'result': kernel_cmd.result.decode('utf-8'),
+                'command': kernel_cmd.command.decode('utf-8').strip('\x00'),
+                'result': kernel_cmd.result.decode('utf-8').strip('\x00'),
                 'status': kernel_cmd.status,
             }
         except OSError as e:
             raise RuntimeError(f"Failed to execute kernel command: {e}")
     
     def get_network_stats(self):
-        """Get network statistics"""
-        if not self.device_fd:
+        """Get comprehensive network statistics"""
+        if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
         
         net_stats = NetworkStats()
@@ -216,9 +373,91 @@ class KernelAPIClient:
                 'tx_bytes': net_stats.tx_bytes,
                 'rx_errors': net_stats.rx_errors,
                 'tx_errors': net_stats.tx_errors,
+                'rx_dropped': net_stats.rx_dropped,
+                'tx_dropped': net_stats.tx_dropped,
+                'multicast': net_stats.multicast,
+                'collisions': net_stats.collisions,
+                'rx_length_errors': net_stats.rx_length_errors,
+                'rx_over_errors': net_stats.rx_over_errors,
+                'rx_crc_errors': net_stats.rx_crc_errors,
+                'rx_frame_errors': net_stats.rx_frame_errors,
+                'rx_fifo_errors': net_stats.rx_fifo_errors,
+                'rx_missed_errors': net_stats.rx_missed_errors,
+                'tx_aborted_errors': net_stats.tx_aborted_errors,
+                'tx_carrier_errors': net_stats.tx_carrier_errors,
+                'tx_fifo_errors': net_stats.tx_fifo_errors,
+                'tx_heartbeat_errors': net_stats.tx_heartbeat_errors,
+                'tx_window_errors': net_stats.tx_window_errors,
             }
         except OSError as e:
             raise RuntimeError(f"Failed to get network stats: {e}")
+    
+    def get_filesystem_info(self):
+        """Get filesystem information"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        fs_info = FilesystemInfo()
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_GET_FILE_SYSTEM_INFO, fs_info)
+            return {
+                'fs_type': fs_info.fs_type.decode('utf-8').strip('\x00'),
+                'total_blocks': fs_info.total_blocks,
+                'free_blocks': fs_info.free_blocks,
+                'available_blocks': fs_info.available_blocks,
+                'total_inodes': fs_info.total_inodes,
+                'free_inodes': fs_info.free_inodes,
+                'block_size': fs_info.block_size,
+                'max_filename_len': fs_info.max_filename_len,
+                'mount_point': fs_info.mount_point.decode('utf-8').strip('\x00'),
+                'device_name': fs_info.device_name.decode('utf-8').strip('\x00'),
+                'flags': fs_info.flags,
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to get filesystem info: {e}")
+    
+    def get_load_average(self):
+        """Get system load average information"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        load_info = LoadAvgInfo()
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_GET_LOADAVG, load_info)
+            return {
+                'load1': load_info.load1 / 65536.0,  # Convert from fixed point
+                'load5': load_info.load5 / 65536.0,
+                'load15': load_info.load15 / 65536.0,
+                'running_tasks': load_info.running_tasks,
+                'total_tasks': load_info.total_tasks,
+                'last_pid': load_info.last_pid,
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to get load average: {e}")
+    
+    def get_kernel_config(self):
+        """Get kernel configuration information"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        config = KernelConfig()
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_GET_KERNEL_CONFIG, config)
+            return {
+                'version': config.version.decode('utf-8').strip('\x00'),
+                'compile_time': config.compile_time.decode('utf-8').strip('\x00'),
+                'compile_by': config.compile_by.decode('utf-8').strip('\x00'),
+                'compile_host': config.compile_host.decode('utf-8').strip('\x00'),
+                'compiler': config.compiler.decode('utf-8').strip('\x00'),
+                'build_date': config.build_date.decode('utf-8').strip('\x00'),
+                'hz': config.hz,
+                'page_size': config.page_size,
+                'phys_addr_bits': config.phys_addr_bits,
+                'virt_addr_bits': config.virt_addr_bits,
+                'arch': config.arch.decode('utf-8').strip('\x00'),
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to get kernel config: {e}")
     
     def send_netlink_message(self, message):
         """Send a message via netlink"""
@@ -238,7 +477,10 @@ class KernelAPIClient:
             raise RuntimeError("Shared memory not available")
         
         self.shared_memory.seek(offset)
-        self.shared_memory.write(data.encode('utf-8') if isinstance(data, str) else data)
+        if isinstance(data, str):
+            self.shared_memory.write(data.encode('utf-8'))
+        else:
+            self.shared_memory.write(data)
         self.shared_memory.flush()
     
     def read_shared_memory(self, size=None, offset=0):
@@ -253,98 +495,229 @@ class KernelAPIClient:
             data = self.shared_memory.read(size)
         
         return data.rstrip(b'\x00').decode('utf-8')
+    
+    def get_all_available_commands(self):
+        """Get list of all available kernel commands"""
+        commands = [
+            "get_kernel_version",
+            "get_uptime", 
+            "get_hostname",
+            "get_domainname",
+            "get_total_memory",
+            "get_free_memory",
+            "get_cpu_count",
+            "get_page_size",
+            "get_hz",
+            "get_jiffies"
+        ]
+        return commands
+    
+    def export_system_info(self, filename=None):
+        """Export comprehensive system information to JSON"""
+        if not filename:
+            filename = f"system_info_{int(time.time())}.json"
+        
+        system_info = {
+            'timestamp': datetime.now().isoformat(),
+            'kernel_config': self.get_kernel_config(),
+            'memory_info': self.get_memory_info(),
+            'cpu_info': self.get_cpu_info(),
+            'load_average': self.get_load_average(),
+            'network_stats': self.get_network_stats(),
+            'filesystem_info': self.get_filesystem_info(),
+            'current_process': self.get_process_info(os.getpid()),
+        }
+        
+        # Add kernel command results
+        system_info['kernel_commands'] = {}
+        for cmd in self.get_all_available_commands():
+            try:
+                result = self.execute_kernel_command(cmd)
+                system_info['kernel_commands'][cmd] = result
+            except Exception as e:
+                system_info['kernel_commands'][cmd] = {'error': str(e)}
+        
+        with open(filename, 'w') as f:
+            json.dump(system_info, f, indent=2)
+        
+        return filename
 
 def format_bytes(bytes_value):
     """Format bytes to human readable format"""
-    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+    if bytes_value == 0:
+        return "0 B"
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB', 'PB']:
         if bytes_value < 1024.0:
             return f"{bytes_value:.2f} {unit}"
         bytes_value /= 1024.0
-    return f"{bytes_value:.2f} PB"
+    return f"{bytes_value:.2f} EB"
+
+def format_time(seconds):
+    """Format seconds to human readable format"""
+    if seconds < 60:
+        return f"{seconds} seconds"
+    elif seconds < 3600:
+        return f"{seconds//60} minutes, {seconds%60} seconds"
+    elif seconds < 86400:
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        return f"{hours} hours, {minutes} minutes"
+    else:
+        days = seconds // 86400
+        hours = (seconds % 86400) // 3600
+        return f"{days} days, {hours} hours"
+
+def print_header(title):
+    """Print a formatted header"""
+    print(f"\n{'='*60}")
+    print(f"  {title}")
+    print(f"{'='*60}")
+
+def print_section(title):
+    """Print a formatted section header"""
+    print(f"\n--- {title} ---")
 
 def main():
-    """Main function demonstrating the API usage"""
+    """Main function demonstrating the enhanced API usage"""
     client = KernelAPIClient()
     
-    print("=== Kernel API Client Demo ===")
+    print("🚀 Kernel API Client v2.0 - Advanced System Monitor")
+    print("=" * 60)
     
     # Connect to kernel driver
     if not client.connect():
-        print("Failed to connect to kernel driver")
+        print("❌ Failed to connect to kernel driver")
+        print("\nMake sure to:")
+        print("1. Load the kernel module: sudo make -f Makefile.kernel load")
+        print("2. Set permissions: sudo chmod 666 /dev/kernel_api_exporter")
         return 1
     
     try:
+        # Test kernel configuration
+        print_header("KERNEL CONFIGURATION")
+        config = client.get_kernel_config()
+        print(f"Kernel Version: {config['version']}")
+        print(f"Architecture: {config['arch']}")
+        print(f"Page Size: {format_bytes(config['page_size'])}")
+        print(f"HZ: {config['hz']}")
+        print(f"Compiler: {config['compiler']}")
+        print(f"Build Date: {config['build_date']}")
+        
         # Test memory information
-        print("\n--- Memory Information ---")
+        print_header("MEMORY INFORMATION")
         mem_info = client.get_memory_info()
         print(f"Total RAM: {format_bytes(mem_info['total_ram'])}")
         print(f"Free RAM: {format_bytes(mem_info['free_ram'])}")
         print(f"Used RAM: {format_bytes(mem_info['used_ram'])}")
         print(f"Buffers: {format_bytes(mem_info['buffers'])}")
-        print(f"Total Swap: {format_bytes(mem_info['swap_total'])}")
-        print(f"Free Swap: {format_bytes(mem_info['swap_free'])}")
+        print(f"Cached: {format_bytes(mem_info['cached'])}")
+        print(f"Swap Total: {format_bytes(mem_info['swap_total'])}")
+        print(f"Swap Free: {format_bytes(mem_info['swap_free'])}")
+        print(f"Slab: {format_bytes(mem_info['slab'])}")
+        print(f"Dirty Pages: {format_bytes(mem_info['dirty'])}")
+        print(f"Mapped: {format_bytes(mem_info['mapped'])}")
         
         # Test CPU information
-        print("\n--- CPU Information ---")
+        print_header("CPU INFORMATION")
         cpu_info = client.get_cpu_info()
-        print(f"Number of CPUs: {cpu_info['num_cpus']}")
         print(f"CPU Model: {cpu_info['cpu_model']}")
-        print(f"Uptime: {cpu_info['uptime']} seconds")
+        print(f"Vendor ID: {cpu_info['vendor_id']}")
+        print(f"CPU Family: {cpu_info['cpu_family']}")
+        print(f"Total CPUs: {cpu_info['num_cpus']}")
+        print(f"Online CPUs: {cpu_info['num_online_cpus']}")
+        print(f"Cache Alignment: {cpu_info['cache_alignment']} bytes")
+        print(f"System Uptime: {format_time(cpu_info['uptime'])}")
+        
+        # Test load average
+        print_header("SYSTEM LOAD")
+        load = client.get_load_average()
+        print(f"Load Average: {load['load1']:.2f} {load['load5']:.2f} {load['load15']:.2f}")
+        print(f"Running Tasks: {load['running_tasks']}")
+        print(f"Total Tasks: {load['total_tasks']}")
         
         # Test process information
-        print("\n--- Process Information ---")
+        print_header("CURRENT PROCESS INFORMATION")
         current_pid = os.getpid()
         proc_info = client.get_process_info(current_pid)
         if proc_info:
             print(f"PID: {proc_info['pid']}")
             print(f"Command: {proc_info['comm']}")
+            print(f"Parent PID: {proc_info['ppid']}")
             print(f"Memory Usage: {format_bytes(proc_info['memory_usage'])}")
+            print(f"Virtual Size: {format_bytes(proc_info['vsize'])}")
+            print(f"RSS: {proc_info['rss']} pages")
             print(f"Number of Threads: {proc_info['num_threads']}")
+            print(f"Process State: {proc_info['state']}")
+            print(f"Nice Value: {proc_info['nice']}")
+            print(f"Priority: {proc_info['priority']}")
         else:
             print(f"Process {current_pid} not found")
         
         # Test kernel commands
-        print("\n--- Kernel Commands ---")
-        commands = ["get_kernel_version", "get_uptime", "invalid_command"]
+        print_header("KERNEL COMMANDS")
+        commands = client.get_all_available_commands()
         for cmd in commands:
-            result = client.execute_kernel_command(cmd)
-            print(f"Command: {result['command']}")
-            print(f"Result: {result['result']}")
-            print(f"Status: {result['status']}")
-            print()
+            try:
+                result = client.execute_kernel_command(cmd)
+                print(f"{cmd}: {result['result']}")
+            except Exception as e:
+                print(f"{cmd}: ERROR - {e}")
         
         # Test network statistics
-        print("\n--- Network Statistics ---")
+        print_header("NETWORK STATISTICS")
         net_stats = client.get_network_stats()
-        print(f"RX Packets: {net_stats['rx_packets']}")
-        print(f"TX Packets: {net_stats['tx_packets']}")
+        print(f"RX Packets: {net_stats['rx_packets']:,}")
+        print(f"TX Packets: {net_stats['tx_packets']:,}")
         print(f"RX Bytes: {format_bytes(net_stats['rx_bytes'])}")
         print(f"TX Bytes: {format_bytes(net_stats['tx_bytes'])}")
+        print(f"RX Errors: {net_stats['rx_errors']}")
+        print(f"TX Errors: {net_stats['tx_errors']}")
+        print(f"RX Dropped: {net_stats['rx_dropped']}")
+        print(f"TX Dropped: {net_stats['tx_dropped']}")
+        
+        # Test filesystem information
+        print_header("FILESYSTEM INFORMATION")
+        fs_info = client.get_filesystem_info()
+        print(f"Filesystem Type: {fs_info['fs_type']}")
+        print(f"Mount Point: {fs_info['mount_point']}")
+        print(f"Device: {fs_info['device_name']}")
+        print(f"Total Blocks: {fs_info['total_blocks']:,}")
+        print(f"Free Blocks: {fs_info['free_blocks']:,}")
+        print(f"Block Size: {format_bytes(fs_info['block_size'])}")
+        print(f"Total Inodes: {fs_info['total_inodes']:,}")
+        print(f"Free Inodes: {fs_info['free_inodes']:,}")
         
         # Test shared memory
-        print("\n--- Shared Memory Test ---")
-        test_data = "Hello from userland!"
+        print_header("SHARED MEMORY TEST")
+        test_data = f"Test data from PID {os.getpid()} at {datetime.now()}"
         client.write_shared_memory(test_data)
         read_data = client.read_shared_memory()
         print(f"Written: {test_data}")
         print(f"Read: {read_data}")
+        print("✓ Shared memory working correctly")
         
         # Test netlink communication
-        print("\n--- Netlink Communication Test ---")
+        print_header("NETLINK COMMUNICATION TEST")
         try:
-            response = client.send_netlink_message("Hello kernel!")
+            response = client.send_netlink_message("Hello from userland!")
             print(f"Netlink response: {response}")
         except Exception as e:
-            print(f"Netlink test failed: {e}")
+            print(f"⚠ Netlink test failed: {e}")
+        
+        # Export system information
+        print_header("SYSTEM INFORMATION EXPORT")
+        export_file = client.export_system_info()
+        print(f"✓ System information exported to: {export_file}")
         
     except Exception as e:
-        print(f"Error during API testing: {e}")
+        print(f"❌ Error during API testing: {e}")
         return 1
     
     finally:
         client.disconnect()
     
-    print("\n=== Demo completed successfully ===")
+    print_header("DEMO COMPLETED SUCCESSFULLY")
+    print("🎉 All kernel API functions tested successfully!")
     return 0
 
 if __name__ == "__main__":
