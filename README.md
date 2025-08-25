@@ -311,11 +311,94 @@ if __name__ == "__main__":
     comprehensive_system_monitor()
 ```
 
+## ⚠️ توابع خطرناک جدید
+
+### کنترل پروسه‌ها
+```python
+# کشتن پروسه (خطرناک!)
+result = client.kill_process(1234, signal=9)
+print(result['message'])
+
+# متوقف کردن پروسه
+client.suspend_process(1234)
+client.resume_process(1234)
+```
+
+### مدیریت ماژول‌های کرنل
+```python
+# بارگذاری ماژول (خیلی خطرناک!)
+result = client.load_kernel_module("/path/to/module.ko", "param1=value1")
+
+# حذف ماژول
+result = client.unload_kernel_module("module_name")
+```
+
+### کنترل شبکه
+```python
+# خاموش/روشن کردن interface
+result = client.toggle_network_interface("eth0", up=False)  # خاموش
+result = client.toggle_network_interface("eth0", up=True)   # روشن
+```
+
+### مدیریت فایل‌سیستم
+```python
+# Mount کردن
+result = client.mount_filesystem("/dev/sdb1", "/mnt/test", "ext4")
+
+# Unmount کردن  
+result = client.unmount_filesystem("/mnt/test")
+```
+
+### تزریق لاگ سفارشی
+```python
+# تزریق لاگ در کرنل
+client.inject_kernel_log("پیام سفارشی من! 🚀", "WARNING")
+# loglevel: EMERG, ALERT, CRIT, ERR, WARNING, NOTICE, INFO, DEBUG
+```
+
+### عملیات حافظه
+```python
+# فورس Memory Reclaim (خطرناک!)
+result = client.force_memory_reclaim()
+```
+
+### CPU Affinity
+```python  
+# تنظیم CPU affinity برای پروسه
+client.set_cpu_affinity(pid=1234, cpu_mask=0x3)  # CPU 0 و 1
+```
+
+### 💀 Kernel Panic
+```python
+# خطرناک‌ترین: crash کردن کل سیستم!
+client.trigger_kernel_panic()  # سیستم crash می‌شه! 💀
+```
+
+## نمونه اجرای خطرناک
+```python
+from kapi_client import KernelAPIClient
+
+client = KernelAPIClient()
+if client.connect():
+    # تزریق لاگ
+    client.inject_kernel_log("سلام از Python! 👋", "INFO")
+    
+    # کنترل interface (احتیاط!)
+    client.toggle_network_interface("lo", False)  # خاموش
+    client.toggle_network_interface("lo", True)   # روشن
+    
+    client.disconnect()
+```
+
 ## رفع مشکلات رایج
 
 ### 1. ارورهای کامپایل
 ```bash
-# اگر ارور implicit declaration دریافت کردید:
+# اگر ارور vm_committed_as میده:
+# این رفع شده در نسخه جدید
+
+# اگر frame size warning میده:
+# این هم رفع شده با dynamic allocationریافت کردید:
 # این مسائل در نسخه 2.0 رفع شده‌اند
 
 # بررسی headers کرنل
