@@ -1133,6 +1133,8 @@ static int device_mmap(struct file *file, struct vm_area_struct *vma)
     unsigned long size = vma->vm_end - vma->vm_start;
     unsigned long pfn;
     
+    printk(KERN_INFO "KAPI: mmap called, size: %lu, buffer_size: %zu\n", size, buffer_size);
+    
     if (size > buffer_size) {
         printk(KERN_ERR "KAPI: mmap size %lu exceeds buffer size %zu\n", size, buffer_size);
         return -EINVAL;
@@ -1143,14 +1145,29 @@ static int device_mmap(struct file *file, struct vm_area_struct *vma)
         return -ENOMEM;
     }
     
-    pfn = shared_buffer_phys >> PAGE_SHIFT;
+    // Check alignment
+    if (vma->vm_start & ~PAGE_MASK) {
+        printk(KERN_ERR "KAPI: vm_start not page aligned: 0x%lx\n", vma->vm_start);
+        return -EINVAL;
+    }
     
-    // Set proper VMA flags
-    vma->vm_flags |= VM_IO | VM_DONTEXPAND | VM_DONTDUMP;
-    vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+    if (size & ~PAGE_MASK) {
+        printk(KERN_ERR "KAPI: size not page aligned: %lu\n", size);
+        return -EINVAL;
+    }
+    
+    pfn = shared_buffer_phys >> PAGE_SHIFT;
+    printk(KERN_INFO "KAPI: Mapping phys: 0x%lx, pfn: 0x%lx, size: %lu\n", 
+           shared_buffer_phys, pfn, size);
+    
+    // Set proper VMA flags - compatible with kernel 6.8+
+    vm_flags_set(vma, VM_IO | VM_DONTEXPAND | VM_DONTDUMP);
+    
+    // Use writecombine instead of noncached for better performance
+    vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
     
     if (remap_pfn_range(vma, vma->vm_start, pfn, size, vma->vm_page_prot)) {
-        printk(KERN_ERR "KAPI: remap_pfn_range failed\n");
+        printk(KERN_ERR "KAPI: remap_pfn_range failed for pfn: 0x%lx\n", pfn);
         return -EAGAIN;
     }
     
@@ -1208,14 +1225,22 @@ static int __init kapi_init(void)
     printk(KERN_INFO "KAPI: Architecture: %s\n", init_uts_ns.name.machine);
     
     // Allocate shared buffer using __get_free_pages for proper alignment
-    shared_buffer = (void *)__get_free_pages(GFP_KERNEL, get_order(buffer_size));
+    shared_buffer = (void *)__get_free_pages(GFP_KERNEL | __GFP_ZERO, get_order(buffer_size));
     if (!shared_buffer) {
         printk(KERN_ALERT "KAPI: Failed to allocate shared buffer\n");
         return -ENOMEM;
     }
     shared_buffer_phys = virt_to_phys(shared_buffer);
-    memset(shared_buffer, 0, buffer_size);
-    printk(KERN_INFO "KAPI: Allocated %zu bytes for shared buffer at phys: 0x%lx\n", buffer_size, shared_buffer_phys);
+    
+    // Verify alignment
+    if (shared_buffer_phys & ~PAGE_MASK) {
+        printk(KERN_ALERT "KAPI: Buffer not page aligned! phys: 0x%lx\n", shared_buffer_phys);
+        free_pages((unsigned long)shared_buffer, get_order(buffer_size));
+        return -ENOMEM;
+    }
+    
+    printk(KERN_INFO "KAPI: Allocated %zu bytes for shared buffer at virt: %p, phys: 0x%lx\n", 
+           buffer_size, shared_buffer, shared_buffer_phys);
     
     // Register character device
     major_number = register_chrdev(0, DEVICE_NAME, &fops);
