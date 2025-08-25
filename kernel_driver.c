@@ -860,8 +860,8 @@ static ssize_t device_write(struct file *filep, const char *buffer, size_t len, 
 static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
     int retval = 0;
-    void *buffer;
-    size_t buffer_size;
+    void *buffer = NULL;
+    size_t buf_size;
     
     if (_IOC_TYPE(cmd) != KAPI_IOC_MAGIC) return -ENOTTY;
     if (_IOC_NR(cmd) > KAPI_IOC_MAXNR) return -ENOTTY;
@@ -870,115 +870,115 @@ static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
     
     switch (cmd) {
         case KAPI_GET_MEMORY_INFO:
-            buffer_size = sizeof(struct memory_info);
-            buffer = kmalloc(buffer_size, GFP_KERNEL);
+            buf_size = sizeof(struct memory_info);
+            buffer = kmalloc(buf_size, GFP_KERNEL);
             if (!buffer) {
                 retval = -ENOMEM;
                 break;
             }
             get_memory_info((struct memory_info *)buffer);
-            if (copy_to_user((void *)arg, buffer, buffer_size))
+            if (copy_to_user((void *)arg, buffer, buf_size))
                 retval = -EFAULT;
             kfree(buffer);
             break;
             
         case KAPI_GET_CPU_INFO:
-            buffer_size = sizeof(struct cpu_info);
-            buffer = kmalloc(buffer_size, GFP_KERNEL);
+            buf_size = sizeof(struct cpu_info);
+            buffer = kmalloc(buf_size, GFP_KERNEL);
             if (!buffer) {
                 retval = -ENOMEM;
                 break;
             }
             get_cpu_info((struct cpu_info *)buffer);
-            if (copy_to_user((void *)arg, buffer, buffer_size))
+            if (copy_to_user((void *)arg, buffer, buf_size))
                 retval = -EFAULT;
             kfree(buffer);
             break;
             
         case KAPI_GET_PROCESS_INFO:
-            buffer_size = sizeof(struct process_info);
-            buffer = kmalloc(buffer_size, GFP_KERNEL);
+            buf_size = sizeof(struct process_info);
+            buffer = kmalloc(buf_size, GFP_KERNEL);
             if (!buffer) {
                 retval = -ENOMEM;
                 break;
             }
-            if (copy_from_user(buffer, (void *)arg, buffer_size)) {
+            if (copy_from_user(buffer, (void *)arg, buf_size)) {
                 retval = -EFAULT;
                 kfree(buffer);
                 break;
             }
             get_process_info((struct process_info *)buffer, ((struct process_info *)buffer)->pid);
-            if (copy_to_user((void *)arg, buffer, buffer_size))
+            if (copy_to_user((void *)arg, buffer, buf_size))
                 retval = -EFAULT;
             kfree(buffer);
             break;
             
         case KAPI_EXECUTE_KERNEL_CMD:
-            buffer_size = sizeof(struct kernel_cmd);
-            buffer = kmalloc(buffer_size, GFP_KERNEL);
+            buf_size = sizeof(struct kernel_cmd);
+            buffer = kmalloc(buf_size, GFP_KERNEL);
             if (!buffer) {
                 retval = -ENOMEM;
                 break;
             }
-            if (copy_from_user(buffer, (void *)arg, buffer_size)) {
+            if (copy_from_user(buffer, (void *)arg, buf_size)) {
                 retval = -EFAULT;
                 kfree(buffer);
                 break;
             }
             execute_kernel_command((struct kernel_cmd *)buffer);
-            if (copy_to_user((void *)arg, buffer, buffer_size))
+            if (copy_to_user((void *)arg, buffer, buf_size))
                 retval = -EFAULT;
             kfree(buffer);
             break;
             
         case KAPI_GET_NETWORK_STATS:
-            buffer_size = sizeof(struct network_stats);
-            buffer = kmalloc(buffer_size, GFP_KERNEL);
+            buf_size = sizeof(struct network_stats);
+            buffer = kmalloc(buf_size, GFP_KERNEL);
             if (!buffer) {
                 retval = -ENOMEM;
                 break;
             }
             get_network_stats((struct network_stats *)buffer);
-            if (copy_to_user((void *)arg, buffer, buffer_size))
+            if (copy_to_user((void *)arg, buffer, buf_size))
                 retval = -EFAULT;
             kfree(buffer);
             break;
             
         case KAPI_GET_FILE_SYSTEM_INFO:
-            buffer_size = sizeof(struct filesystem_info);
-            buffer = kmalloc(buffer_size, GFP_KERNEL);
+            buf_size = sizeof(struct filesystem_info);
+            buffer = kmalloc(buf_size, GFP_KERNEL);
             if (!buffer) {
                 retval = -ENOMEM;
                 break;
             }
             get_filesystem_info((struct filesystem_info *)buffer);
-            if (copy_to_user((void *)arg, buffer, buffer_size))
+            if (copy_to_user((void *)arg, buffer, buf_size))
                 retval = -EFAULT;
             kfree(buffer);
             break;
             
         case KAPI_GET_LOADAVG:
-            buffer_size = sizeof(struct loadavg_info);
-            buffer = kmalloc(buffer_size, GFP_KERNEL);
+            buf_size = sizeof(struct loadavg_info);
+            buffer = kmalloc(buf_size, GFP_KERNEL);
             if (!buffer) {
                 retval = -ENOMEM;
                 break;
             }
             get_loadavg_info((struct loadavg_info *)buffer);
-            if (copy_to_user((void *)arg, buffer, buffer_size))
+            if (copy_to_user((void *)arg, buffer, buf_size))
                 retval = -EFAULT;
             kfree(buffer);
             break;
             
         case KAPI_GET_KERNEL_CONFIG:
-            buffer_size = sizeof(struct kernel_config);
-            buffer = kmalloc(buffer_size, GFP_KERNEL);
+            buf_size = sizeof(struct kernel_config);
+            buffer = kmalloc(buf_size, GFP_KERNEL);
             if (!buffer) {
                 retval = -ENOMEM;
                 break;
             }
             get_kernel_config((struct kernel_config *)buffer);
-            if (copy_to_user((void *)arg, buffer, buffer_size))
+            if (copy_to_user((void *)arg, buffer, buf_size))
                 retval = -EFAULT;
             kfree(buffer);
             break;
