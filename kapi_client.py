@@ -387,6 +387,22 @@ class KernelAPIClient:
             fcntl.ioctl(self.device_fd, KAPI_GET_PROCESS_INFO, proc_info)
             if proc_info.pid == -1:
                 return None
+            
+            # Safe state handling
+            try:
+                if hasattr(proc_info.state, 'value'):
+                    state_val = proc_info.state.value
+                else:
+                    state_val = proc_info.state
+                
+                if isinstance(state_val, bytes):
+                    state_char = state_val.decode('utf-8')[0] if len(state_val) > 0 else 'U'
+                elif isinstance(state_val, int) and state_val > 0:
+                    state_char = chr(state_val)
+                else:
+                    state_char = 'U'
+            except:
+                state_char = 'U'
                 
             return {
                 'pid': proc_info.pid,
@@ -405,7 +421,7 @@ class KernelAPIClient:
                 'priority': proc_info.priority,
                 'nice': proc_info.nice,
                 'num_threads_full': proc_info.num_threads_full,
-                'state': chr(proc_info.state) if proc_info.state else 'U',
+                'state': state_char,
                 'flags': proc_info.flags,
             }
         except OSError as e:
