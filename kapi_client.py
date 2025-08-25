@@ -23,13 +23,13 @@ DEVICE_PATH = "/dev/kernel_api_exporter"
 KAPI_IOC_MAGIC = ord('k')
 
 def _IOC(direction, magic, number, size):
-    return (direction << 30) | (magic << 8) | number | (size << 16)
+    return (direction << 30) | (magic << 8) | number | (int(size) << 16)
 
 def _IOR(magic, number, struct_type):
-    return _IOC(2, magic, number, sizeof(struct_type))
+    return _IOC(2, magic, number, int(sizeof(struct_type)))
 
 def _IOWR(magic, number, struct_type):
-    return _IOC(3, magic, number, sizeof(struct_type))
+    return _IOC(3, magic, number, int(sizeof(struct_type)))
 
 # Netlink constants
 NETLINK_USER = 31
@@ -221,7 +221,7 @@ class CPUControl(Structure):
     ]
 
 def _IOW(magic, number, struct_type):
-    return _IOC(1, magic, number, sizeof(struct_type))
+    return _IOC(1, magic, number, int(sizeof(struct_type)))
 
 def _IO(magic, number):
     return _IOC(0, magic, number, 0)
