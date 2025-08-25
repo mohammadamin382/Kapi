@@ -31,6 +31,36 @@ def _IOR(magic, number, struct_type):
 def _IOWR(magic, number, struct_type):
     return _IOC(3, magic, number, sizeof(struct_type))
 
+def _IOW(magic, number, struct_type):
+    return _IOC(1, magic, number, sizeof(struct_type))
+
+def _IO(magic, number):
+    return _IOC(0, magic, number, 0)
+
+# IOCTL Commands
+KAPI_GET_MEMORY_INFO = _IOR(KAPI_IOC_MAGIC, 1, MemoryInfo)
+KAPI_GET_CPU_INFO = _IOR(KAPI_IOC_MAGIC, 2, CPUInfo)
+KAPI_GET_PROCESS_INFO = _IOWR(KAPI_IOC_MAGIC, 3, ProcessInfo)
+KAPI_EXECUTE_KERNEL_CMD = _IOWR(KAPI_IOC_MAGIC, 4, KernelCmd)
+KAPI_GET_NETWORK_STATS = _IOR(KAPI_IOC_MAGIC, 5, NetworkStats)
+KAPI_GET_FILE_SYSTEM_INFO = _IOR(KAPI_IOC_MAGIC, 6, FilesystemInfo)
+KAPI_GET_KERNEL_MODULES = _IOR(KAPI_IOC_MAGIC, 7, ModuleInfo)
+KAPI_GET_INTERRUPTS = _IOR(KAPI_IOC_MAGIC, 8, InterruptInfo)
+KAPI_GET_LOADAVG = _IOR(KAPI_IOC_MAGIC, 9, LoadavgInfo)
+KAPI_GET_KERNEL_CONFIG = _IOR(KAPI_IOC_MAGIC, 10, KernelConfig)
+KAPI_KILL_PROCESS = _IOW(KAPI_IOC_MAGIC, 15, ProcessControl)
+KAPI_SUSPEND_PROCESS = _IOW(KAPI_IOC_MAGIC, 16, ProcessControl)
+KAPI_RESUME_PROCESS = _IOW(KAPI_IOC_MAGIC, 17, ProcessControl)
+KAPI_LOAD_MODULE = _IOW(KAPI_IOC_MAGIC, 18, ModuleControl)
+KAPI_UNLOAD_MODULE = _IOW(KAPI_IOC_MAGIC, 19, ModuleControl)
+KAPI_TOGGLE_INTERFACE = _IOW(KAPI_IOC_MAGIC, 20, NetControl)
+KAPI_MOUNT_FS = _IOW(KAPI_IOC_MAGIC, 21, FsControl)
+KAPI_UMOUNT_FS = _IOW(KAPI_IOC_MAGIC, 22, FsControl)
+KAPI_INJECT_LOG = _IOW(KAPI_IOC_MAGIC, 23, LogInjection)
+KAPI_FORCE_PAGE_RECLAIM = _IO(KAPI_IOC_MAGIC, 24)
+KAPI_SET_CPU_AFFINITY = _IOW(KAPI_IOC_MAGIC, 25, CpuControl)
+KAPI_PANIC_KERNEL = _IO(KAPI_IOC_MAGIC, 26)
+
 # Netlink constants
 NETLINK_USER = 31
 
@@ -53,6 +83,56 @@ class MemoryInfo(Structure):
         ("anon_pages", c_ulong),
         ("mapped", c_ulong),
         ("shmem", c_ulong),
+    ]
+
+class ProcessControl(Structure):
+    _fields_ = [
+        ("pid", c_int),
+        ("signal", c_int),
+        ("status", c_int),
+        ("message", c_char * 256),
+    ]
+
+class ModuleControl(Structure):
+    _fields_ = [
+        ("path", c_char * 256),
+        ("name", c_char * 64),
+        ("params", c_char * 256),
+        ("status", c_int),
+        ("message", c_char * 256),
+    ]
+
+class NetControl(Structure):
+    _fields_ = [
+        ("interface", c_char * 16),
+        ("up", c_int),
+        ("status", c_int),
+        ("message", c_char * 256),
+    ]
+
+class FsControl(Structure):
+    _fields_ = [
+        ("device", c_char * 128),
+        ("path", c_char * 256),
+        ("type", c_char * 32),
+        ("options", c_char * 256),
+        ("status", c_int),
+        ("message", c_char * 256),
+    ]
+
+class LogInjection(Structure):
+    _fields_ = [
+        ("level", c_char * 16),
+        ("message", c_char * 512),
+        ("status", c_int),
+    ]
+
+class CpuControl(Structure):
+    _fields_ = [
+        ("pid", c_int),
+        ("mask", c_ulong),
+        ("status", c_int),
+        ("message", c_char * 256),
     ]
 
 class CPUInfo(Structure):
@@ -566,6 +646,219 @@ class KernelAPIClient:
             data = self.shared_memory.read(size)
         
         return data.rstrip(b'\x00').decode('utf-8')
+    
+    # ⚠️ خطرناک: کنترل پروسه‌ها
+    def kill_process(self, pid, signal=9):
+        """Kill a process by PID (خطرناک!)"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        ctrl = ProcessControl()
+        ctrl.pid = pid
+        ctrl.signal = signal
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_KILL_PROCESS, ctrl)
+            return {
+                'status': ctrl.status,
+                'message': ctrl.message.decode('utf-8').strip('\x00')
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to kill process: {e}")
+    
+    def suspend_process(self, pid):
+        """Suspend a process (خطرناک!)"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        ctrl = ProcessControl()
+        ctrl.pid = pid
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_SUSPEND_PROCESS, ctrl)
+            return {
+                'status': ctrl.status,
+                'message': ctrl.message.decode('utf-8').strip('\x00')
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to suspend process: {e}")
+    
+    def resume_process(self, pid):
+        """Resume a suspended process"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        ctrl = ProcessControl()
+        ctrl.pid = pid
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_RESUME_PROCESS, ctrl)
+            return {
+                'status': ctrl.status,
+                'message': ctrl.message.decode('utf-8').strip('\x00')
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to resume process: {e}")
+    
+    # ⚠️ خطرناک: مدیریت ماژول‌ها
+    def load_kernel_module(self, path, params=""):
+        """Load a kernel module (خیلی خطرناک!)"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        mod_ctrl = ModuleControl()
+        mod_ctrl.path = path.encode('utf-8')
+        mod_ctrl.params = params.encode('utf-8')
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_LOAD_MODULE, mod_ctrl)
+            return {
+                'status': mod_ctrl.status,
+                'message': mod_ctrl.message.decode('utf-8').strip('\x00')
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to load module: {e}")
+    
+    def unload_kernel_module(self, name):
+        """Unload a kernel module (خطرناک!)"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        mod_ctrl = ModuleControl()
+        mod_ctrl.name = name.encode('utf-8')
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_UNLOAD_MODULE, mod_ctrl)
+            return {
+                'status': mod_ctrl.status,
+                'message': mod_ctrl.message.decode('utf-8').strip('\x00')
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to unload module: {e}")
+    
+    # ⚠️ خطرناک: کنترل شبکه
+    def toggle_network_interface(self, interface, up=True):
+        """Toggle network interface up/down (خطرناک!)"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        net_ctrl = NetControl()
+        net_ctrl.interface = interface.encode('utf-8')
+        net_ctrl.up = 1 if up else 0
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_TOGGLE_INTERFACE, net_ctrl)
+            return {
+                'status': net_ctrl.status,
+                'message': net_ctrl.message.decode('utf-8').strip('\x00')
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to toggle interface: {e}")
+    
+    # ⚠️ خطرناک: فایل‌سیستم
+    def mount_filesystem(self, device, path, fs_type="ext4", options=""):
+        """Mount filesystem (خطرناک!)"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        fs_ctrl = FsControl()
+        fs_ctrl.device = device.encode('utf-8')
+        fs_ctrl.path = path.encode('utf-8')
+        fs_ctrl.type = fs_type.encode('utf-8')
+        fs_ctrl.options = options.encode('utf-8')
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_MOUNT_FS, fs_ctrl)
+            return {
+                'status': fs_ctrl.status,
+                'message': fs_ctrl.message.decode('utf-8').strip('\x00')
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to mount filesystem: {e}")
+    
+    def unmount_filesystem(self, path):
+        """Unmount filesystem (خطرناک!)"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        fs_ctrl = FsControl()
+        fs_ctrl.path = path.encode('utf-8')
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_UMOUNT_FS, fs_ctrl)
+            return {
+                'status': fs_ctrl.status,
+                'message': fs_ctrl.message.decode('utf-8').strip('\x00')
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to unmount filesystem: {e}")
+    
+    # ⚠️ خطرناک: تزریق لاگ
+    def inject_kernel_log(self, message, level="INFO"):
+        """Inject custom log into kernel (خطرناک!)"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        log_inj = LogInjection()
+        log_inj.level = level.encode('utf-8')
+        log_inj.message = message.encode('utf-8')
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_INJECT_LOG, log_inj)
+            return {
+                'status': log_inj.status,
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to inject log: {e}")
+    
+    # ⚠️ خیلی خطرناک: Memory reclaim
+    def force_memory_reclaim(self):
+        """Force memory page reclaim (خیلی خطرناک!)"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_FORCE_PAGE_RECLAIM)
+            return {'status': 0, 'message': 'Memory reclaim triggered'}
+        except OSError as e:
+            raise RuntimeError(f"Failed to force memory reclaim: {e}")
+    
+    # ⚠️ خطرناک: CPU Affinity
+    def set_cpu_affinity(self, pid, cpu_mask):
+        """Set CPU affinity for process (خطرناک!)"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        cpu_ctrl = CpuControl()
+        cpu_ctrl.pid = pid
+        cpu_ctrl.mask = cpu_mask
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_SET_CPU_AFFINITY, cpu_ctrl)
+            return {
+                'status': cpu_ctrl.status,
+                'message': cpu_ctrl.message.decode('utf-8').strip('\x00')
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to set CPU affinity: {e}")
+    
+    # 💀 خطرناک‌ترین: Kernel Panic!
+    def trigger_kernel_panic(self):
+        """Trigger kernel panic - سیستم crash می‌شه! 💀"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        print("⚠️  WARNING: This will crash the entire system!")
+        confirm = input("Type 'YES I WANT TO CRASH' to continue: ")
+        if confirm != "YES I WANT TO CRASH":
+            print("Cancelled.")
+            return
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_PANIC_KERNEL)
+            # هرگز اینجا نمی‌رسه چون سیستم crash شده! 
+        except OSError as e:
+            raise RuntimeError(f"Failed to trigger panic: {e}")
     
     def get_all_available_commands(self):
         """Get list of all available kernel commands"""
