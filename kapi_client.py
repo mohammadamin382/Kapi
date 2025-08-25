@@ -169,6 +169,63 @@ class KernelConfig(Structure):
         ("arch", c_char * 32),
     ]
 
+# Dangerous control structures
+class ProcessControl(Structure):
+    _fields_ = [
+        ("pid", c_int),
+        ("signal", c_int),
+        ("status", c_int),
+        ("message", c_char * 256),
+    ]
+
+class ModuleControl(Structure):
+    _fields_ = [
+        ("path", c_char * 256),
+        ("name", c_char * 64),
+        ("params", c_char * 256),
+        ("status", c_int),
+        ("message", c_char * 256),
+    ]
+
+class NetControl(Structure):
+    _fields_ = [
+        ("interface", c_char * 16),
+        ("up", c_int),
+        ("status", c_int),
+        ("message", c_char * 256),
+    ]
+
+class FSControl(Structure):
+    _fields_ = [
+        ("device", c_char * 128),
+        ("path", c_char * 256),
+        ("type", c_char * 32),
+        ("options", c_char * 256),
+        ("status", c_int),
+        ("message", c_char * 256),
+    ]
+
+class LogInjection(Structure):
+    _fields_ = [
+        ("level", c_char * 16),
+        ("message", c_char * 512),
+        ("status", c_int),
+    ]
+
+class CPUControl(Structure):
+    _fields_ = [
+        ("pid", c_int),
+        ("mask", c_ulong),
+        ("status", c_int),
+        ("message", c_char * 256),
+    ]
+
+def _IOW(magic, number, struct_type):
+    return _IOC(1, magic, number, sizeof(struct_type))
+
+def _IO(magic, number):
+    return _IOC(0, magic, number, 0)
+
 # IOCTL command definitions
 KAPI_GET_MEMORY_INFO = _IOR(KAPI_IOC_MAGIC, 1, MemoryInfo)
 KAPI_GET_CPU_INFO = _IOR(KAPI_IOC_MAGIC, 2, CPUInfo)
@@ -178,6 +235,20 @@ KAPI_GET_NETWORK_STATS = _IOR(KAPI_IOC_MAGIC, 5, NetworkStats)
 KAPI_GET_FILE_SYSTEM_INFO = _IOR(KAPI_IOC_MAGIC, 6, FilesystemInfo)
 KAPI_GET_LOADAVG = _IOR(KAPI_IOC_MAGIC, 9, LoadAvgInfo)
 KAPI_GET_KERNEL_CONFIG = _IOR(KAPI_IOC_MAGIC, 10, KernelConfig)
+
+# Dangerous control commands
+KAPI_KILL_PROCESS = _IOW(KAPI_IOC_MAGIC, 15, ProcessControl)
+KAPI_SUSPEND_PROCESS = _IOW(KAPI_IOC_MAGIC, 16, ProcessControl)
+KAPI_RESUME_PROCESS = _IOW(KAPI_IOC_MAGIC, 17, ProcessControl)
+KAPI_LOAD_MODULE = _IOW(KAPI_IOC_MAGIC, 18, ModuleControl)
+KAPI_UNLOAD_MODULE = _IOW(KAPI_IOC_MAGIC, 19, ModuleControl)
+KAPI_TOGGLE_INTERFACE = _IOW(KAPI_IOC_MAGIC, 20, NetControl)
+KAPI_MOUNT_FS = _IOW(KAPI_IOC_MAGIC, 21, FSControl)
+KAPI_UMOUNT_FS = _IOW(KAPI_IOC_MAGIC, 22, FSControl)
+KAPI_INJECT_LOG = _IOW(KAPI_IOC_MAGIC, 23, LogInjection)
+KAPI_FORCE_PAGE_RECLAIM = _IO(KAPI_IOC_MAGIC, 24)
+KAPI_SET_CPU_AFFINITY = _IOW(KAPI_IOC_MAGIC, 25, CPUControl)
+KAPI_PANIC_KERNEL = _IO(KAPI_IOC_MAGIC, 26)
 
 class KernelAPIClient:
     """Enhanced client class for communicating with the kernel driver"""
@@ -541,6 +612,230 @@ class KernelAPIClient:
             json.dump(system_info, f, indent=2)
         
         return filename
+    
+    # 🔥 DANGEROUS CONTROL METHODS 🔥
+    # These methods can seriously damage your system!
+    
+    def kill_process(self, pid, signal=9):
+        """⚠️ DANGEROUS: Kill a process with specified signal"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        ctrl = ProcessControl()
+        ctrl.pid = pid
+        ctrl.signal = signal
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_KILL_PROCESS, ctrl)
+            return {
+                'status': ctrl.status,
+                'message': ctrl.message.decode('utf-8').strip('\x00'),
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to kill process: {e}")
+    
+    def suspend_process(self, pid):
+        """⚠️ DANGEROUS: Suspend a process (SIGSTOP)"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        ctrl = ProcessControl()
+        ctrl.pid = pid
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_SUSPEND_PROCESS, ctrl)
+            return {
+                'status': ctrl.status,
+                'message': ctrl.message.decode('utf-8').strip('\x00'),
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to suspend process: {e}")
+    
+    def resume_process(self, pid):
+        """⚠️ DANGEROUS: Resume a suspended process (SIGCONT)"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        ctrl = ProcessControl()
+        ctrl.pid = pid
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_RESUME_PROCESS, ctrl)
+            return {
+                'status': ctrl.status,
+                'message': ctrl.message.decode('utf-8').strip('\x00'),
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to resume process: {e}")
+    
+    def load_kernel_module(self, path, params=""):
+        """⚠️ DANGEROUS: Load a kernel module"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        ctrl = ModuleControl()
+        ctrl.path = path.encode('utf-8')
+        ctrl.params = params.encode('utf-8')
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_LOAD_MODULE, ctrl)
+            return {
+                'status': ctrl.status,
+                'message': ctrl.message.decode('utf-8').strip('\x00'),
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to load module: {e}")
+    
+    def unload_kernel_module(self, name):
+        """⚠️ DANGEROUS: Unload a kernel module"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        ctrl = ModuleControl()
+        ctrl.name = name.encode('utf-8')
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_UNLOAD_MODULE, ctrl)
+            return {
+                'status': ctrl.status,
+                'message': ctrl.message.decode('utf-8').strip('\x00'),
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to unload module: {e}")
+    
+    def toggle_network_interface(self, interface, up=True):
+        """⚠️ DANGEROUS: Bring network interface up/down"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        ctrl = NetControl()
+        ctrl.interface = interface.encode('utf-8')
+        ctrl.up = 1 if up else 0
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_TOGGLE_INTERFACE, ctrl)
+            return {
+                'status': ctrl.status,
+                'message': ctrl.message.decode('utf-8').strip('\x00'),
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to toggle interface: {e}")
+    
+    def mount_filesystem(self, device, path, fs_type="ext4", options=""):
+        """⚠️ DANGEROUS: Mount a filesystem"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        ctrl = FSControl()
+        ctrl.device = device.encode('utf-8')
+        ctrl.path = path.encode('utf-8')
+        ctrl.type = fs_type.encode('utf-8')
+        ctrl.options = options.encode('utf-8')
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_MOUNT_FS, ctrl)
+            return {
+                'status': ctrl.status,
+                'message': ctrl.message.decode('utf-8').strip('\x00'),
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to mount filesystem: {e}")
+    
+    def unmount_filesystem(self, path):
+        """⚠️ DANGEROUS: Unmount a filesystem"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        ctrl = FSControl()
+        ctrl.path = path.encode('utf-8')
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_UMOUNT_FS, ctrl)
+            return {
+                'status': ctrl.status,
+                'message': ctrl.message.decode('utf-8').strip('\x00'),
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to unmount filesystem: {e}")
+    
+    def inject_kernel_log(self, message, level="INFO"):
+        """⚠️ DANGEROUS: Inject a custom log message into kernel log"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        log_inj = LogInjection()
+        log_inj.level = level.encode('utf-8')
+        log_inj.message = message.encode('utf-8')
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_INJECT_LOG, log_inj)
+            return {
+                'status': log_inj.status,
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to inject log: {e}")
+    
+    def force_memory_reclaim(self):
+        """💀 EXTREMELY DANGEROUS: Force kernel memory reclaim (may hang system!)"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        print("⚠️ WARNING: This operation may cause system instability!")
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_FORCE_PAGE_RECLAIM)
+            return {'status': 0}
+        except OSError as e:
+            raise RuntimeError(f"Failed to force memory reclaim: {e}")
+    
+    def set_cpu_affinity(self, pid, cpu_mask):
+        """⚠️ DANGEROUS: Set CPU affinity for a process"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        ctrl = CPUControl()
+        ctrl.pid = pid
+        ctrl.mask = cpu_mask
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_SET_CPU_AFFINITY, ctrl)
+            return {
+                'status': ctrl.status,
+                'message': ctrl.message.decode('utf-8').strip('\x00'),
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to set CPU affinity: {e}")
+    
+    def panic_kernel(self):
+        """💀💀💀 EXTREMELY DANGEROUS: Trigger kernel panic! WILL CRASH SYSTEM! 💀💀💀"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+        
+        print("💀💀💀 WARNING: THIS WILL CRASH THE ENTIRE SYSTEM! 💀💀💀")
+        print("Are you absolutely sure? This is irreversible!")
+        
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_PANIC_KERNEL)
+            # This line will never be reached
+            return {'status': 0}
+        except OSError as e:
+            raise RuntimeError(f"Failed to panic kernel: {e}")
+    
+    def get_dangerous_commands(self):
+        """Get list of dangerous commands available"""
+        return [
+            "kill_process",
+            "suspend_process", 
+            "resume_process",
+            "load_kernel_module",
+            "unload_kernel_module",
+            "toggle_network_interface",
+            "mount_filesystem",
+            "unmount_filesystem",
+            "inject_kernel_log",
+            "force_memory_reclaim",
+            "set_cpu_affinity",
+            "panic_kernel"  # 💀
+        ]
 
 def format_bytes(bytes_value):
     """Format bytes to human readable format"""
@@ -709,6 +1004,24 @@ def main():
         export_file = client.export_system_info()
         print(f"✓ System information exported to: {export_file}")
         
+        # 🔥 DANGEROUS FUNCTIONS DEMO (BE CAREFUL!)
+        print_header("DANGEROUS FUNCTIONS AVAILABLE")
+        dangerous_cmds = client.get_dangerous_commands()
+        print("⚠️ Available dangerous functions (use with extreme caution!):")
+        for i, cmd in enumerate(dangerous_cmds, 1):
+            danger_level = "💀💀💀" if cmd == "panic_kernel" else "💀" if cmd == "force_memory_reclaim" else "⚠️"
+            print(f"{i:2d}. {danger_level} {cmd}")
+        
+        print("\n🔥 Safe demonstration of log injection:")
+        try:
+            result = client.inject_kernel_log("Hello from KAPI Python client!", "INFO")
+            print(f"✓ Log injected successfully (check dmesg)")
+        except Exception as e:
+            print(f"⚠ Log injection failed: {e}")
+        
+        print("\n⚠️ NOTE: Other dangerous functions are available but not demonstrated")
+        print("    for safety reasons. Use them only if you know what you're doing!")
+        
     except Exception as e:
         print(f"❌ Error during API testing: {e}")
         return 1
@@ -718,6 +1031,7 @@ def main():
     
     print_header("DEMO COMPLETED SUCCESSFULLY")
     print("🎉 All kernel API functions tested successfully!")
+    print("💡 To see injected log: dmesg | grep KAPI_INJECT")
     return 0
 
 if __name__ == "__main__":
