@@ -1,5 +1,6 @@
 
 obj-m := kernel_driver.o
+EXTRA_CFLAGS := -Wno-error=date-time -Wno-error=enum-conversion
 
 KERNEL_DIR := /lib/modules/$(shell uname -r)/build
 PWD := $(shell pwd)
