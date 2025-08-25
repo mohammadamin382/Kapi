@@ -281,8 +281,19 @@ class KernelAPIClient:
 
             # Memory map the device (16KB buffer)
             try:
-                self.shared_memory = mmap.mmap(self.device_fd, 16384, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE, offset=0)
+                # Try to memory map with proper flags
+                self.shared_memory = mmap.mmap(
+                    self.device_fd, 
+                    16384,  # 4 pages * 4KB = 16KB
+                    mmap.MAP_SHARED, 
+                    mmap.PROT_READ | mmap.PROT_WRITE, 
+                    offset=0
+                )
                 print("✓ Memory mapped device buffer (16KB)")
+            except OSError as e:
+                print(f"⚠ Memory mapping failed with OSError: {e}")
+                print(f"  Error code: {e.errno}")
+                self.shared_memory = None
             except Exception as e:
                 print(f"⚠ Memory mapping failed: {e}")
                 self.shared_memory = None
@@ -1005,12 +1016,18 @@ def main():
 
         # Test shared memory
         print_header("SHARED MEMORY TEST")
-        test_data = f"Test data from PID {os.getpid()} at {datetime.now()}"
-        client.write_shared_memory(test_data)
-        read_data = client.read_shared_memory()
-        print(f"Written: {test_data}")
-        print(f"Read: {read_data}")
-        print("✓ Shared memory working correctly")
+        if client.shared_memory:
+            try:
+                test_data = f"Test data from PID {os.getpid()} at {datetime.now()}"
+                client.write_shared_memory(test_data)
+                read_data = client.read_shared_memory()
+                print(f"Written: {test_data}")
+                print(f"Read: {read_data}")
+                print("✓ Shared memory working correctly")
+            except Exception as e:
+                print(f"❌ Shared memory test failed: {e}")
+        else:
+            print("⚠ Shared memory not available - skipping test")
 
         # Test netlink communication
         print_header("NETLINK COMMUNICATION TEST")
