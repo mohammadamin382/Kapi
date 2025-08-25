@@ -314,8 +314,9 @@ static int major_number;
 static struct class* kapi_class = NULL;
 static struct device* kapi_device = NULL;
 static struct sock *netlink_sock = NULL;
-static char *shared_buffer;
+static void *shared_buffer;
 static size_t buffer_size = PAGE_SIZE * 4; // 16KB shared buffer
+static unsigned long shared_buffer_phys;
 
 // Function prototypes
 static int device_open(struct inode *, struct file *);
@@ -1130,16 +1131,30 @@ static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 static int device_mmap(struct file *file, struct vm_area_struct *vma)
 {
     unsigned long size = vma->vm_end - vma->vm_start;
+    unsigned long pfn;
     
-    if (size > buffer_size)
+    if (size > buffer_size) {
+        printk(KERN_ERR "KAPI: mmap size %lu exceeds buffer size %zu\n", size, buffer_size);
         return -EINVAL;
+    }
     
-    if (remap_pfn_range(vma, vma->vm_start, 
-                       virt_to_phys((void *)shared_buffer) >> PAGE_SHIFT,
-                       size, vma->vm_page_prot))
+    if (!shared_buffer) {
+        printk(KERN_ERR "KAPI: shared_buffer is NULL\n");
+        return -ENOMEM;
+    }
+    
+    pfn = shared_buffer_phys >> PAGE_SHIFT;
+    
+    // Set proper VMA flags
+    vma->vm_flags |= VM_IO | VM_DONTEXPAND | VM_DONTDUMP;
+    vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+    
+    if (remap_pfn_range(vma, vma->vm_start, pfn, size, vma->vm_page_prot)) {
+        printk(KERN_ERR "KAPI: remap_pfn_range failed\n");
         return -EAGAIN;
+    }
     
-    printk(KERN_INFO "KAPI: Memory mapped successfully, size: %lu\n", size);
+    printk(KERN_INFO "KAPI: Memory mapped successfully, size: %lu, pfn: 0x%lx\n", size, pfn);
     return 0;
 }
 
@@ -1192,14 +1207,15 @@ static int __init kapi_init(void)
     printk(KERN_INFO "KAPI: Kernel version: %s\n", init_uts_ns.name.release);
     printk(KERN_INFO "KAPI: Architecture: %s\n", init_uts_ns.name.machine);
     
-    // Allocate shared buffer
-    shared_buffer = kmalloc(buffer_size, GFP_KERNEL);
+    // Allocate shared buffer using __get_free_pages for proper alignment
+    shared_buffer = (void *)__get_free_pages(GFP_KERNEL, get_order(buffer_size));
     if (!shared_buffer) {
         printk(KERN_ALERT "KAPI: Failed to allocate shared buffer\n");
         return -ENOMEM;
     }
+    shared_buffer_phys = virt_to_phys(shared_buffer);
     memset(shared_buffer, 0, buffer_size);
-    printk(KERN_INFO "KAPI: Allocated %zu bytes for shared buffer\n", buffer_size);
+    printk(KERN_INFO "KAPI: Allocated %zu bytes for shared buffer at phys: 0x%lx\n", buffer_size, shared_buffer_phys);
     
     // Register character device
     major_number = register_chrdev(0, DEVICE_NAME, &fops);
@@ -1277,7 +1293,7 @@ static void __exit kapi_exit(void)
     }
     
     if (shared_buffer) {
-        kfree(shared_buffer);
+        free_pages((unsigned long)shared_buffer, get_order(buffer_size));
         printk(KERN_INFO "KAPI: Shared buffer freed\n");
     }
     
