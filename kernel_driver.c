@@ -353,7 +353,7 @@ static void get_memory_info(struct memory_info *mem_info)
                      global_node_page_state(NR_SLAB_UNRECLAIMABLE_B);
     mem_info->page_tables = global_node_page_state(NR_PAGETABLE);
     mem_info->vmalloc_used = 0; // Simplified
-    mem_info->committed_as = percpu_counter_sum_positive(&vm_committed_as);
+    mem_info->committed_as = 0; // Use sysinfo instead of internal symbol
     mem_info->dirty = global_node_page_state(NR_FILE_DIRTY) << PAGE_SHIFT;
     mem_info->writeback = global_node_page_state(NR_WRITEBACK) << PAGE_SHIFT;
     mem_info->anon_pages = global_node_page_state(NR_ANON_MAPPED) << PAGE_SHIFT;
@@ -860,14 +860,8 @@ static ssize_t device_write(struct file *filep, const char *buffer, size_t len, 
 static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
     int retval = 0;
-    struct memory_info mem_info;
-    struct cpu_info cpu_info;
-    struct process_info proc_info;
-    struct kernel_cmd kernel_cmd;
-    struct network_stats net_stats;
-    struct filesystem_info fs_info;
-    struct loadavg_info load_info;
-    struct kernel_config config;
+    void *buffer;
+    size_t buffer_size;
     
     if (_IOC_TYPE(cmd) != KAPI_IOC_MAGIC) return -ENOTTY;
     if (_IOC_NR(cmd) > KAPI_IOC_MAXNR) return -ENOTTY;
@@ -876,59 +870,117 @@ static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
     
     switch (cmd) {
         case KAPI_GET_MEMORY_INFO:
-            get_memory_info(&mem_info);
-            if (copy_to_user((struct memory_info *)arg, &mem_info, sizeof(mem_info)))
+            buffer_size = sizeof(struct memory_info);
+            buffer = kmalloc(buffer_size, GFP_KERNEL);
+            if (!buffer) {
+                retval = -ENOMEM;
+                break;
+            }
+            get_memory_info((struct memory_info *)buffer);
+            if (copy_to_user((void *)arg, buffer, buffer_size))
                 retval = -EFAULT;
+            kfree(buffer);
             break;
             
         case KAPI_GET_CPU_INFO:
-            get_cpu_info(&cpu_info);
-            if (copy_to_user((struct cpu_info *)arg, &cpu_info, sizeof(cpu_info)))
+            buffer_size = sizeof(struct cpu_info);
+            buffer = kmalloc(buffer_size, GFP_KERNEL);
+            if (!buffer) {
+                retval = -ENOMEM;
+                break;
+            }
+            get_cpu_info((struct cpu_info *)buffer);
+            if (copy_to_user((void *)arg, buffer, buffer_size))
                 retval = -EFAULT;
+            kfree(buffer);
             break;
             
         case KAPI_GET_PROCESS_INFO:
-            if (copy_from_user(&proc_info, (struct process_info *)arg, sizeof(proc_info))) {
-                retval = -EFAULT;
+            buffer_size = sizeof(struct process_info);
+            buffer = kmalloc(buffer_size, GFP_KERNEL);
+            if (!buffer) {
+                retval = -ENOMEM;
                 break;
             }
-            get_process_info(&proc_info, proc_info.pid);
-            if (copy_to_user((struct process_info *)arg, &proc_info, sizeof(proc_info)))
+            if (copy_from_user(buffer, (void *)arg, buffer_size)) {
                 retval = -EFAULT;
+                kfree(buffer);
+                break;
+            }
+            get_process_info((struct process_info *)buffer, ((struct process_info *)buffer)->pid);
+            if (copy_to_user((void *)arg, buffer, buffer_size))
+                retval = -EFAULT;
+            kfree(buffer);
             break;
             
         case KAPI_EXECUTE_KERNEL_CMD:
-            if (copy_from_user(&kernel_cmd, (struct kernel_cmd *)arg, sizeof(kernel_cmd))) {
-                retval = -EFAULT;
+            buffer_size = sizeof(struct kernel_cmd);
+            buffer = kmalloc(buffer_size, GFP_KERNEL);
+            if (!buffer) {
+                retval = -ENOMEM;
                 break;
             }
-            execute_kernel_command(&kernel_cmd);
-            if (copy_to_user((struct kernel_cmd *)arg, &kernel_cmd, sizeof(kernel_cmd)))
+            if (copy_from_user(buffer, (void *)arg, buffer_size)) {
                 retval = -EFAULT;
+                kfree(buffer);
+                break;
+            }
+            execute_kernel_command((struct kernel_cmd *)buffer);
+            if (copy_to_user((void *)arg, buffer, buffer_size))
+                retval = -EFAULT;
+            kfree(buffer);
             break;
             
         case KAPI_GET_NETWORK_STATS:
-            get_network_stats(&net_stats);
-            if (copy_to_user((struct network_stats *)arg, &net_stats, sizeof(net_stats)))
+            buffer_size = sizeof(struct network_stats);
+            buffer = kmalloc(buffer_size, GFP_KERNEL);
+            if (!buffer) {
+                retval = -ENOMEM;
+                break;
+            }
+            get_network_stats((struct network_stats *)buffer);
+            if (copy_to_user((void *)arg, buffer, buffer_size))
                 retval = -EFAULT;
+            kfree(buffer);
             break;
             
         case KAPI_GET_FILE_SYSTEM_INFO:
-            get_filesystem_info(&fs_info);
-            if (copy_to_user((struct filesystem_info *)arg, &fs_info, sizeof(fs_info)))
+            buffer_size = sizeof(struct filesystem_info);
+            buffer = kmalloc(buffer_size, GFP_KERNEL);
+            if (!buffer) {
+                retval = -ENOMEM;
+                break;
+            }
+            get_filesystem_info((struct filesystem_info *)buffer);
+            if (copy_to_user((void *)arg, buffer, buffer_size))
                 retval = -EFAULT;
+            kfree(buffer);
             break;
             
         case KAPI_GET_LOADAVG:
-            get_loadavg_info(&load_info);
-            if (copy_to_user((struct loadavg_info *)arg, &load_info, sizeof(load_info)))
+            buffer_size = sizeof(struct loadavg_info);
+            buffer = kmalloc(buffer_size, GFP_KERNEL);
+            if (!buffer) {
+                retval = -ENOMEM;
+                break;
+            }
+            get_loadavg_info((struct loadavg_info *)buffer);
+            if (copy_to_user((void *)arg, buffer, buffer_size))
                 retval = -EFAULT;
+            kfree(buffer);
             break;
             
         case KAPI_GET_KERNEL_CONFIG:
-            get_kernel_config(&config);
-            if (copy_to_user((struct kernel_config *)arg, &config, sizeof(config)))
+            buffer_size = sizeof(struct kernel_config);
+            buffer = kmalloc(buffer_size, GFP_KERNEL);
+            if (!buffer) {
+                retval = -ENOMEM;
+                break;
+            }
+            get_kernel_config((struct kernel_config *)buffer);
+            if (copy_to_user((void *)arg, buffer, buffer_size))
                 retval = -EFAULT;
+            kfree(buffer);
             break;
             
         // خطرناک: کنترل پروسه‌ها
