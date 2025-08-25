@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 Kernel API Client v2.0 - Advanced Python userland interface for the kernel driver
@@ -252,13 +251,13 @@ KAPI_PANIC_KERNEL = _IO(KAPI_IOC_MAGIC, 26)
 
 class KernelAPIClient:
     """Enhanced client class for communicating with the kernel driver"""
-    
+
     def __init__(self):
         self.device_fd = None
         self.netlink_socket = None
         self.shared_memory = None
         self.connected = False
-        
+
     def connect(self):
         """Connect to the kernel driver"""
         try:
@@ -266,11 +265,11 @@ class KernelAPIClient:
             if not os.path.exists(DEVICE_PATH):
                 print(f"Device {DEVICE_PATH} not found. Make sure the kernel module is loaded.")
                 return False
-            
+
             # Open character device
             self.device_fd = os.open(DEVICE_PATH, os.O_RDWR)
             print(f"✓ Connected to kernel driver at {DEVICE_PATH}")
-            
+
             # Create netlink socket
             try:
                 self.netlink_socket = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, NETLINK_USER)
@@ -279,49 +278,49 @@ class KernelAPIClient:
             except Exception as e:
                 print(f"⚠ Netlink socket creation failed: {e}")
                 self.netlink_socket = None
-            
+
             # Memory map the device (16KB buffer)
             try:
-                self.shared_memory = mmap.mmap(self.device_fd, 16384, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE)
+                self.shared_memory = mmap.mmap(self.device_fd, 16384, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE, offset=0)
                 print("✓ Memory mapped device buffer (16KB)")
             except Exception as e:
                 print(f"⚠ Memory mapping failed: {e}")
                 self.shared_memory = None
-            
+
             self.connected = True
             return True
-            
+
         except Exception as e:
             print(f"✗ Failed to connect to kernel driver: {e}")
             self.disconnect()
             return False
-    
+
     def disconnect(self):
         """Disconnect from the kernel driver"""
         if self.shared_memory:
             self.shared_memory.close()
             self.shared_memory = None
-            
+
         if self.netlink_socket:
             self.netlink_socket.close()
             self.netlink_socket = None
-            
+
         if self.device_fd:
             os.close(self.device_fd)
             self.device_fd = None
-            
+
         self.connected = False
         print("✓ Disconnected from kernel driver")
-    
+
     def is_connected(self):
         """Check if connected to the kernel driver"""
         return self.connected and self.device_fd is not None
-    
+
     def get_memory_info(self):
         """Get comprehensive system memory information"""
         if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
-        
+
         mem_info = MemoryInfo()
         try:
             fcntl.ioctl(self.device_fd, KAPI_GET_MEMORY_INFO, mem_info)
@@ -345,12 +344,12 @@ class KernelAPIClient:
             }
         except OSError as e:
             raise RuntimeError(f"Failed to get memory info: {e}")
-    
+
     def get_cpu_info(self):
         """Get comprehensive CPU information"""
         if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
-        
+
         cpu_info = CPUInfo()
         try:
             fcntl.ioctl(self.device_fd, KAPI_GET_CPU_INFO, cpu_info)
@@ -374,27 +373,27 @@ class KernelAPIClient:
             }
         except OSError as e:
             raise RuntimeError(f"Failed to get CPU info: {e}")
-    
+
     def get_process_info(self, pid):
         """Get comprehensive information about a specific process"""
         if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
-        
+
         proc_info = ProcessInfo()
         proc_info.pid = pid
-        
+
         try:
             fcntl.ioctl(self.device_fd, KAPI_GET_PROCESS_INFO, proc_info)
             if proc_info.pid == -1:
                 return None
-            
+
             # Safe state handling
             try:
                 if hasattr(proc_info.state, 'value'):
                     state_val = proc_info.state.value
                 else:
                     state_val = proc_info.state
-                
+
                 if isinstance(state_val, bytes):
                     state_char = state_val.decode('utf-8')[0] if len(state_val) > 0 else 'U'
                 elif isinstance(state_val, int) and state_val > 0:
@@ -403,7 +402,7 @@ class KernelAPIClient:
                     state_char = 'U'
             except:
                 state_char = 'U'
-                
+
             return {
                 'pid': proc_info.pid,
                 'comm': proc_info.comm.decode('utf-8').strip('\x00'),
@@ -426,15 +425,15 @@ class KernelAPIClient:
             }
         except OSError as e:
             raise RuntimeError(f"Failed to get process info: {e}")
-    
+
     def execute_kernel_command(self, command):
         """Execute a command in kernel space"""
         if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
-        
+
         kernel_cmd = KernelCmd()
         kernel_cmd.command = command.encode('utf-8')
-        
+
         try:
             fcntl.ioctl(self.device_fd, KAPI_EXECUTE_KERNEL_CMD, kernel_cmd)
             return {
@@ -444,12 +443,12 @@ class KernelAPIClient:
             }
         except OSError as e:
             raise RuntimeError(f"Failed to execute kernel command: {e}")
-    
+
     def get_network_stats(self):
         """Get comprehensive network statistics"""
         if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
-        
+
         net_stats = NetworkStats()
         try:
             fcntl.ioctl(self.device_fd, KAPI_GET_NETWORK_STATS, net_stats)
@@ -478,12 +477,12 @@ class KernelAPIClient:
             }
         except OSError as e:
             raise RuntimeError(f"Failed to get network stats: {e}")
-    
+
     def get_filesystem_info(self):
         """Get filesystem information"""
         if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
-        
+
         fs_info = FilesystemInfo()
         try:
             fcntl.ioctl(self.device_fd, KAPI_GET_FILE_SYSTEM_INFO, fs_info)
@@ -502,12 +501,12 @@ class KernelAPIClient:
             }
         except OSError as e:
             raise RuntimeError(f"Failed to get filesystem info: {e}")
-    
+
     def get_load_average(self):
         """Get system load average information"""
         if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
-        
+
         load_info = LoadAvgInfo()
         try:
             fcntl.ioctl(self.device_fd, KAPI_GET_LOADAVG, load_info)
@@ -521,12 +520,12 @@ class KernelAPIClient:
             }
         except OSError as e:
             raise RuntimeError(f"Failed to get load average: {e}")
-    
+
     def get_kernel_config(self):
         """Get kernel configuration information"""
         if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
-        
+
         config = KernelConfig()
         try:
             fcntl.ioctl(self.device_fd, KAPI_GET_KERNEL_CONFIG, config)
@@ -545,49 +544,55 @@ class KernelAPIClient:
             }
         except OSError as e:
             raise RuntimeError(f"Failed to get kernel config: {e}")
-    
+
     def send_netlink_message(self, message):
         """Send a message via netlink"""
         if not self.netlink_socket:
             raise RuntimeError("Netlink socket not available")
-        
+
         try:
             self.netlink_socket.send(message.encode('utf-8'))
             response = self.netlink_socket.recv(1024)
             return response.decode('utf-8')
         except Exception as e:
             raise RuntimeError(f"Netlink communication failed: {e}")
-    
+
     def write_shared_memory(self, data, offset=0):
         """Write data to shared memory"""
         if not self.shared_memory:
             raise RuntimeError("Shared memory not available")
-        
-        self.shared_memory.seek(offset)
-        if isinstance(data, str):
-            self.shared_memory.write(data.encode('utf-8'))
-        else:
-            self.shared_memory.write(data)
-        self.shared_memory.flush()
-    
+
+        try:
+            self.shared_memory.seek(offset)
+            if isinstance(data, str):
+                self.shared_memory.write(data.encode('utf-8'))
+            else:
+                self.shared_memory.write(data)
+            self.shared_memory.flush()
+        except Exception as e:
+            raise RuntimeError(f"Failed to write to shared memory: {e}")
+
     def read_shared_memory(self, size=None, offset=0):
         """Read data from shared memory"""
         if not self.shared_memory:
             raise RuntimeError("Shared memory not available")
-        
-        self.shared_memory.seek(offset)
-        if size is None:
-            data = self.shared_memory.read()
-        else:
-            data = self.shared_memory.read(size)
-        
-        return data.rstrip(b'\x00').decode('utf-8')
-    
+
+        try:
+            self.shared_memory.seek(offset)
+            if size is None:
+                data = self.shared_memory.read()
+            else:
+                data = self.shared_memory.read(size)
+
+            return data.rstrip(b'\x00').decode('utf-8')
+        except Exception as e:
+            raise RuntimeError(f"Failed to read from shared memory: {e}")
+
     def get_all_available_commands(self):
         """Get list of all available kernel commands"""
         commands = [
             "get_kernel_version",
-            "get_uptime", 
+            "get_uptime",
             "get_hostname",
             "get_domainname",
             "get_total_memory",
@@ -598,12 +603,12 @@ class KernelAPIClient:
             "get_jiffies"
         ]
         return commands
-    
+
     def export_system_info(self, filename=None):
         """Export comprehensive system information to JSON"""
         if not filename:
             filename = f"system_info_{int(time.time())}.json"
-        
+
         system_info = {
             'timestamp': datetime.now().isoformat(),
             'kernel_config': self.get_kernel_config(),
@@ -614,7 +619,7 @@ class KernelAPIClient:
             'filesystem_info': self.get_filesystem_info(),
             'current_process': self.get_process_info(os.getpid()),
         }
-        
+
         # Add kernel command results
         system_info['kernel_commands'] = {}
         for cmd in self.get_all_available_commands():
@@ -623,24 +628,24 @@ class KernelAPIClient:
                 system_info['kernel_commands'][cmd] = result
             except Exception as e:
                 system_info['kernel_commands'][cmd] = {'error': str(e)}
-        
+
         with open(filename, 'w') as f:
             json.dump(system_info, f, indent=2)
-        
+
         return filename
-    
+
     # 🔥 DANGEROUS CONTROL METHODS 🔥
     # These methods can seriously damage your system!
-    
+
     def kill_process(self, pid, signal=9):
         """⚠️ DANGEROUS: Kill a process with specified signal"""
         if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
-        
+
         ctrl = ProcessControl()
         ctrl.pid = pid
         ctrl.signal = signal
-        
+
         try:
             fcntl.ioctl(self.device_fd, KAPI_KILL_PROCESS, ctrl)
             return {
@@ -649,15 +654,15 @@ class KernelAPIClient:
             }
         except OSError as e:
             raise RuntimeError(f"Failed to kill process: {e}")
-    
+
     def suspend_process(self, pid):
         """⚠️ DANGEROUS: Suspend a process (SIGSTOP)"""
         if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
-        
+
         ctrl = ProcessControl()
         ctrl.pid = pid
-        
+
         try:
             fcntl.ioctl(self.device_fd, KAPI_SUSPEND_PROCESS, ctrl)
             return {
@@ -666,15 +671,15 @@ class KernelAPIClient:
             }
         except OSError as e:
             raise RuntimeError(f"Failed to suspend process: {e}")
-    
+
     def resume_process(self, pid):
         """⚠️ DANGEROUS: Resume a suspended process (SIGCONT)"""
         if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
-        
+
         ctrl = ProcessControl()
         ctrl.pid = pid
-        
+
         try:
             fcntl.ioctl(self.device_fd, KAPI_RESUME_PROCESS, ctrl)
             return {
@@ -683,16 +688,16 @@ class KernelAPIClient:
             }
         except OSError as e:
             raise RuntimeError(f"Failed to resume process: {e}")
-    
+
     def load_kernel_module(self, path, params=""):
         """⚠️ DANGEROUS: Load a kernel module"""
         if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
-        
+
         ctrl = ModuleControl()
         ctrl.path = path.encode('utf-8')
         ctrl.params = params.encode('utf-8')
-        
+
         try:
             fcntl.ioctl(self.device_fd, KAPI_LOAD_MODULE, ctrl)
             return {
@@ -701,15 +706,15 @@ class KernelAPIClient:
             }
         except OSError as e:
             raise RuntimeError(f"Failed to load module: {e}")
-    
+
     def unload_kernel_module(self, name):
         """⚠️ DANGEROUS: Unload a kernel module"""
         if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
-        
+
         ctrl = ModuleControl()
         ctrl.name = name.encode('utf-8')
-        
+
         try:
             fcntl.ioctl(self.device_fd, KAPI_UNLOAD_MODULE, ctrl)
             return {
@@ -718,16 +723,16 @@ class KernelAPIClient:
             }
         except OSError as e:
             raise RuntimeError(f"Failed to unload module: {e}")
-    
+
     def toggle_network_interface(self, interface, up=True):
         """⚠️ DANGEROUS: Bring network interface up/down"""
         if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
-        
+
         ctrl = NetControl()
         ctrl.interface = interface.encode('utf-8')
         ctrl.up = 1 if up else 0
-        
+
         try:
             fcntl.ioctl(self.device_fd, KAPI_TOGGLE_INTERFACE, ctrl)
             return {
@@ -736,18 +741,18 @@ class KernelAPIClient:
             }
         except OSError as e:
             raise RuntimeError(f"Failed to toggle interface: {e}")
-    
+
     def mount_filesystem(self, device, path, fs_type="ext4", options=""):
         """⚠️ DANGEROUS: Mount a filesystem"""
         if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
-        
+
         ctrl = FSControl()
         ctrl.device = device.encode('utf-8')
         ctrl.path = path.encode('utf-8')
         ctrl.type = fs_type.encode('utf-8')
         ctrl.options = options.encode('utf-8')
-        
+
         try:
             fcntl.ioctl(self.device_fd, KAPI_MOUNT_FS, ctrl)
             return {
@@ -756,15 +761,15 @@ class KernelAPIClient:
             }
         except OSError as e:
             raise RuntimeError(f"Failed to mount filesystem: {e}")
-    
+
     def unmount_filesystem(self, path):
         """⚠️ DANGEROUS: Unmount a filesystem"""
         if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
-        
+
         ctrl = FSControl()
         ctrl.path = path.encode('utf-8')
-        
+
         try:
             fcntl.ioctl(self.device_fd, KAPI_UMOUNT_FS, ctrl)
             return {
@@ -773,16 +778,16 @@ class KernelAPIClient:
             }
         except OSError as e:
             raise RuntimeError(f"Failed to unmount filesystem: {e}")
-    
+
     def inject_kernel_log(self, message, level="INFO"):
         """⚠️ DANGEROUS: Inject a custom log message into kernel log"""
         if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
-        
+
         log_inj = LogInjection()
         log_inj.level = level.encode('utf-8')
         log_inj.message = message.encode('utf-8')
-        
+
         try:
             fcntl.ioctl(self.device_fd, KAPI_INJECT_LOG, log_inj)
             return {
@@ -790,28 +795,28 @@ class KernelAPIClient:
             }
         except OSError as e:
             raise RuntimeError(f"Failed to inject log: {e}")
-    
+
     def force_memory_reclaim(self):
         """💀 EXTREMELY DANGEROUS: Force kernel memory reclaim (may hang system!)"""
         if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
-        
+
         print("⚠️ WARNING: This operation may cause system instability!")
         try:
             fcntl.ioctl(self.device_fd, KAPI_FORCE_PAGE_RECLAIM)
             return {'status': 0}
         except OSError as e:
             raise RuntimeError(f"Failed to force memory reclaim: {e}")
-    
+
     def set_cpu_affinity(self, pid, cpu_mask):
         """⚠️ DANGEROUS: Set CPU affinity for a process"""
         if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
-        
+
         ctrl = CPUControl()
         ctrl.pid = pid
         ctrl.mask = cpu_mask
-        
+
         try:
             fcntl.ioctl(self.device_fd, KAPI_SET_CPU_AFFINITY, ctrl)
             return {
@@ -820,27 +825,27 @@ class KernelAPIClient:
             }
         except OSError as e:
             raise RuntimeError(f"Failed to set CPU affinity: {e}")
-    
+
     def panic_kernel(self):
         """💀💀💀 EXTREMELY DANGEROUS: Trigger kernel panic! WILL CRASH SYSTEM! 💀💀💀"""
         if not self.is_connected():
             raise RuntimeError("Not connected to kernel driver")
-        
+
         print("💀💀💀 WARNING: THIS WILL CRASH THE ENTIRE SYSTEM! 💀💀💀")
         print("Are you absolutely sure? This is irreversible!")
-        
+
         try:
             fcntl.ioctl(self.device_fd, KAPI_PANIC_KERNEL)
             # This line will never be reached
             return {'status': 0}
         except OSError as e:
             raise RuntimeError(f"Failed to panic kernel: {e}")
-    
+
     def get_dangerous_commands(self):
         """Get list of dangerous commands available"""
         return [
             "kill_process",
-            "suspend_process", 
+            "suspend_process",
             "resume_process",
             "load_kernel_module",
             "unload_kernel_module",
@@ -891,10 +896,10 @@ def print_section(title):
 def main():
     """Main function demonstrating the enhanced API usage"""
     client = KernelAPIClient()
-    
+
     print("🚀 Kernel API Client v2.0 - Advanced System Monitor")
     print("=" * 60)
-    
+
     # Connect to kernel driver
     if not client.connect():
         print("❌ Failed to connect to kernel driver")
@@ -902,7 +907,7 @@ def main():
         print("1. Load the kernel module: sudo make -f Makefile.kernel load")
         print("2. Set permissions: sudo chmod 666 /dev/kernel_api_exporter")
         return 1
-    
+
     try:
         # Test kernel configuration
         print_header("KERNEL CONFIGURATION")
@@ -913,7 +918,7 @@ def main():
         print(f"HZ: {config['hz']}")
         print(f"Compiler: {config['compiler']}")
         print(f"Build Date: {config['build_date']}")
-        
+
         # Test memory information
         print_header("MEMORY INFORMATION")
         mem_info = client.get_memory_info()
@@ -927,7 +932,7 @@ def main():
         print(f"Slab: {format_bytes(mem_info['slab'])}")
         print(f"Dirty Pages: {format_bytes(mem_info['dirty'])}")
         print(f"Mapped: {format_bytes(mem_info['mapped'])}")
-        
+
         # Test CPU information
         print_header("CPU INFORMATION")
         cpu_info = client.get_cpu_info()
@@ -938,14 +943,14 @@ def main():
         print(f"Online CPUs: {cpu_info['num_online_cpus']}")
         print(f"Cache Alignment: {cpu_info['cache_alignment']} bytes")
         print(f"System Uptime: {format_time(cpu_info['uptime'])}")
-        
+
         # Test load average
         print_header("SYSTEM LOAD")
         load = client.get_load_average()
         print(f"Load Average: {load['load1']:.2f} {load['load5']:.2f} {load['load15']:.2f}")
         print(f"Running Tasks: {load['running_tasks']}")
         print(f"Total Tasks: {load['total_tasks']}")
-        
+
         # Test process information
         print_header("CURRENT PROCESS INFORMATION")
         current_pid = os.getpid()
@@ -963,7 +968,7 @@ def main():
             print(f"Priority: {proc_info['priority']}")
         else:
             print(f"Process {current_pid} not found")
-        
+
         # Test kernel commands
         print_header("KERNEL COMMANDS")
         commands = client.get_all_available_commands()
@@ -973,7 +978,7 @@ def main():
                 print(f"{cmd}: {result['result']}")
             except Exception as e:
                 print(f"{cmd}: ERROR - {e}")
-        
+
         # Test network statistics
         print_header("NETWORK STATISTICS")
         net_stats = client.get_network_stats()
@@ -985,7 +990,7 @@ def main():
         print(f"TX Errors: {net_stats['tx_errors']}")
         print(f"RX Dropped: {net_stats['rx_dropped']}")
         print(f"TX Dropped: {net_stats['tx_dropped']}")
-        
+
         # Test filesystem information
         print_header("FILESYSTEM INFORMATION")
         fs_info = client.get_filesystem_info()
@@ -997,7 +1002,7 @@ def main():
         print(f"Block Size: {format_bytes(fs_info['block_size'])}")
         print(f"Total Inodes: {fs_info['total_inodes']:,}")
         print(f"Free Inodes: {fs_info['free_inodes']:,}")
-        
+
         # Test shared memory
         print_header("SHARED MEMORY TEST")
         test_data = f"Test data from PID {os.getpid()} at {datetime.now()}"
@@ -1006,7 +1011,7 @@ def main():
         print(f"Written: {test_data}")
         print(f"Read: {read_data}")
         print("✓ Shared memory working correctly")
-        
+
         # Test netlink communication
         print_header("NETLINK COMMUNICATION TEST")
         try:
@@ -1014,12 +1019,12 @@ def main():
             print(f"Netlink response: {response}")
         except Exception as e:
             print(f"⚠ Netlink test failed: {e}")
-        
+
         # Export system information
         print_header("SYSTEM INFORMATION EXPORT")
         export_file = client.export_system_info()
         print(f"✓ System information exported to: {export_file}")
-        
+
         # 🔥 DANGEROUS FUNCTIONS DEMO (BE CAREFUL!)
         print_header("DANGEROUS FUNCTIONS AVAILABLE")
         dangerous_cmds = client.get_dangerous_commands()
@@ -1027,24 +1032,24 @@ def main():
         for i, cmd in enumerate(dangerous_cmds, 1):
             danger_level = "💀💀💀" if cmd == "panic_kernel" else "💀" if cmd == "force_memory_reclaim" else "⚠️"
             print(f"{i:2d}. {danger_level} {cmd}")
-        
+
         print("\n🔥 Safe demonstration of log injection:")
         try:
             result = client.inject_kernel_log("Hello from KAPI Python client!", "INFO")
             print(f"✓ Log injected successfully (check dmesg)")
         except Exception as e:
             print(f"⚠ Log injection failed: {e}")
-        
+
         print("\n⚠️ NOTE: Other dangerous functions are available but not demonstrated")
         print("    for safety reasons. Use them only if you know what you're doing!")
-        
+
     except Exception as e:
         print(f"❌ Error during API testing: {e}")
         return 1
-    
+
     finally:
         client.disconnect()
-    
+
     print_header("DEMO COMPLETED SUCCESSFULLY")
     print("🎉 All kernel API functions tested successfully!")
     print("💡 To see injected log: dmesg | grep KAPI_INJECT")
