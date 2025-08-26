@@ -42,6 +42,18 @@
 #include <linux/kmod.h>
 #include <linux/netdevice.h>
 
+// Kernel version compatibility macros
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+    // In newer kernels, use pte_offset_kernel instead of pte_offset_map for kernel addresses
+    #define KAPI_PTE_OFFSET_MAP(pmd, addr) pte_offset_kernel(pmd, addr)
+    #define KAPI_PTE_UNMAP(pte) do { } while(0)  // No unmap needed for kernel addresses
+    #define KAPI_HAS_NEW_PTE_API 1
+#else
+    #define KAPI_PTE_OFFSET_MAP(pmd, addr) pte_offset_map(pmd, addr)
+    #define KAPI_PTE_UNMAP(pte) pte_unmap(pte)
+    #define KAPI_HAS_NEW_PTE_API 0
+#endif
+
 #define DEVICE_NAME "kernel_api_exporter"
 #define CLASS_NAME "kapi"
 #define NETLINK_USER 31
@@ -879,8 +891,80 @@ static int write_physical_memory(struct phys_mem_write *mem_write)
     return 0;
 }
 
+// Alternative method using follow_page (more compatible)
+static int virtual_to_physical_alt(struct virt_to_phys *v2p)
+{
+    struct task_struct *task;
+    struct pid *pid_struct;
+    struct mm_struct *mm;
+    struct page *page;
+    unsigned long phys = 0;
+    
+    if (v2p->pid == 0) {
+        // Kernel virtual address
+        if (virt_addr_valid(v2p->virt_addr)) {
+            v2p->phys_addr = virt_to_phys((void *)v2p->virt_addr);
+            v2p->status = 0;
+            snprintf(v2p->message, sizeof(v2p->message), 
+                     "Kernel virt 0x%lx -> phys 0x%lx", v2p->virt_addr, v2p->phys_addr);
+            return 0;
+        } else {
+            v2p->status = -EINVAL;
+            strcpy(v2p->message, "Invalid kernel virtual address");
+            return -EINVAL;
+        }
+    }
+    
+    // User space virtual address
+    pid_struct = find_get_pid(v2p->pid);
+    if (!pid_struct) {
+        v2p->status = -ESRCH;
+        strcpy(v2p->message, "Process not found");
+        return -ESRCH;
+    }
+    
+    task = pid_task(pid_struct, PIDTYPE_PID);
+    if (!task || !task->mm) {
+        put_pid(pid_struct);
+        v2p->status = -ESRCH;
+        strcpy(v2p->message, "Task or mm_struct not found");
+        return -ESRCH;
+    }
+    
+    mm = task->mm;
+    down_read(&mm->mmap_lock);
+    
+    // Use follow_page instead of manual page table walk
+    page = follow_page(find_vma(mm, v2p->virt_addr), v2p->virt_addr, FOLL_GET);
+    if (!page) {
+        up_read(&mm->mmap_lock);
+        put_pid(pid_struct);
+        v2p->status = -EFAULT;
+        strcpy(v2p->message, "Virtual address not mapped");
+        return -EFAULT;
+    }
+    
+    phys = page_to_phys(page) + (v2p->virt_addr & ~PAGE_MASK);
+    put_page(page);
+    
+    up_read(&mm->mmap_lock);
+    put_pid(pid_struct);
+    
+    v2p->phys_addr = phys;
+    v2p->status = 0;
+    snprintf(v2p->message, sizeof(v2p->message), 
+             "PID %d: virt 0x%lx -> phys 0x%lx", v2p->pid, v2p->virt_addr, phys);
+    
+    return 0;
+}
+
 static int virtual_to_physical(struct virt_to_phys *v2p)
 {
+#if KAPI_HAS_NEW_PTE_API
+    // Use alternative method for newer kernels
+    return virtual_to_physical_alt(v2p);
+#else
+    // Original implementation for older kernels
     struct task_struct *task;
     struct pid *pid_struct;
     struct mm_struct *mm;
@@ -942,12 +1026,12 @@ static int virtual_to_physical(struct virt_to_phys *v2p)
     if (pmd_none(*pmd) || pmd_bad(*pmd))
         goto not_found;
     
-    pte = pte_offset_map(pmd, v2p->virt_addr);
+    pte = KAPI_PTE_OFFSET_MAP(pmd, v2p->virt_addr);
     if (!pte || pte_none(*pte))
         goto not_found_unmap;
     
     phys = (pte_pfn(*pte) << PAGE_SHIFT) + (v2p->virt_addr & ~PAGE_MASK);
-    pte_unmap(pte);
+    KAPI_PTE_UNMAP(pte);
     
     up_read(&mm->mmap_lock);
     put_pid(pid_struct);
@@ -961,13 +1045,14 @@ static int virtual_to_physical(struct virt_to_phys *v2p)
 
 not_found_unmap:
     if (pte)
-        pte_unmap(pte);
+        KAPI_PTE_UNMAP(pte);
 not_found:
     up_read(&mm->mmap_lock);
     put_pid(pid_struct);
     v2p->status = -EFAULT;
     strcpy(v2p->message, "Virtual address not mapped");
     return -EFAULT;
+#endif
 }
 
 static int patch_memory(struct mem_patch *patch)
@@ -1111,11 +1196,20 @@ static ssize_t device_write(struct file *filep, const char *buffer, size_t len, 
     }
 }
 
+// Helper function to allocate and handle IOCTL data transfer
+static int handle_ioctl_data_transfer(unsigned int cmd, unsigned long arg, 
+                                     void *data, size_t size, bool copy_in, bool copy_out)
+{
+    if (copy_in && copy_from_user(data, (void *)arg, size))
+        return -EFAULT;
+    if (copy_out && copy_to_user((void *)arg, data, size))
+        return -EFAULT;
+    return 0;
+}
+
 static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
     int retval = 0;
-    void *buffer = NULL;
-    size_t buf_size;
     
     if (_IOC_TYPE(cmd) != KAPI_IOC_MAGIC) return -ENOTTY;
     if (_IOC_NR(cmd) > KAPI_IOC_MAXNR) return -ENOTTY;
@@ -1123,119 +1217,67 @@ static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
     printk(KERN_INFO "KAPI: IOCTL command %u received\n", cmd);
     
     switch (cmd) {
-        case KAPI_GET_MEMORY_INFO:
-            buf_size = sizeof(struct memory_info);
-            buffer = kmalloc(buf_size, GFP_KERNEL);
-            if (!buffer) {
-                retval = -ENOMEM;
-                break;
-            }
-            get_memory_info((struct memory_info *)buffer);
-            if (copy_to_user((void *)arg, buffer, buf_size))
-                retval = -EFAULT;
-            kfree(buffer);
+        case KAPI_GET_MEMORY_INFO: {
+            struct memory_info mem_info;
+            get_memory_info(&mem_info);
+            retval = handle_ioctl_data_transfer(cmd, arg, &mem_info, sizeof(mem_info), false, true);
             break;
+        }
             
-        case KAPI_GET_CPU_INFO:
-            buf_size = sizeof(struct cpu_info);
-            buffer = kmalloc(buf_size, GFP_KERNEL);
-            if (!buffer) {
-                retval = -ENOMEM;
-                break;
-            }
-            get_cpu_info((struct cpu_info *)buffer);
-            if (copy_to_user((void *)arg, buffer, buf_size))
-                retval = -EFAULT;
-            kfree(buffer);
+        case KAPI_GET_CPU_INFO: {
+            struct cpu_info cpu_info;
+            get_cpu_info(&cpu_info);
+            retval = handle_ioctl_data_transfer(cmd, arg, &cpu_info, sizeof(cpu_info), false, true);
             break;
+        }
             
-        case KAPI_GET_PROCESS_INFO:
-            buf_size = sizeof(struct process_info);
-            buffer = kmalloc(buf_size, GFP_KERNEL);
-            if (!buffer) {
-                retval = -ENOMEM;
-                break;
+        case KAPI_GET_PROCESS_INFO: {
+            struct process_info proc_info;
+            retval = handle_ioctl_data_transfer(cmd, arg, &proc_info, sizeof(proc_info), true, false);
+            if (retval == 0) {
+                get_process_info(&proc_info, proc_info.pid);
+                retval = handle_ioctl_data_transfer(cmd, arg, &proc_info, sizeof(proc_info), false, true);
             }
-            if (copy_from_user(buffer, (void *)arg, buf_size)) {
-                retval = -EFAULT;
-                kfree(buffer);
-                break;
-            }
-            get_process_info((struct process_info *)buffer, ((struct process_info *)buffer)->pid);
-            if (copy_to_user((void *)arg, buffer, buf_size))
-                retval = -EFAULT;
-            kfree(buffer);
             break;
+        }
             
-        case KAPI_EXECUTE_KERNEL_CMD:
-            buf_size = sizeof(struct kernel_cmd);
-            buffer = kmalloc(buf_size, GFP_KERNEL);
-            if (!buffer) {
-                retval = -ENOMEM;
-                break;
+        case KAPI_EXECUTE_KERNEL_CMD: {
+            struct kernel_cmd kcmd;
+            retval = handle_ioctl_data_transfer(cmd, arg, &kcmd, sizeof(kcmd), true, false);
+            if (retval == 0) {
+                execute_kernel_command(&kcmd);
+                retval = handle_ioctl_data_transfer(cmd, arg, &kcmd, sizeof(kcmd), false, true);
             }
-            if (copy_from_user(buffer, (void *)arg, buf_size)) {
-                retval = -EFAULT;
-                kfree(buffer);
-                break;
-            }
-            execute_kernel_command((struct kernel_cmd *)buffer);
-            if (copy_to_user((void *)arg, buffer, buf_size))
-                retval = -EFAULT;
-            kfree(buffer);
             break;
+        }
             
-        case KAPI_GET_NETWORK_STATS:
-            buf_size = sizeof(struct network_stats);
-            buffer = kmalloc(buf_size, GFP_KERNEL);
-            if (!buffer) {
-                retval = -ENOMEM;
-                break;
-            }
-            get_network_stats((struct network_stats *)buffer);
-            if (copy_to_user((void *)arg, buffer, buf_size))
-                retval = -EFAULT;
-            kfree(buffer);
+        case KAPI_GET_NETWORK_STATS: {
+            struct network_stats net_stats;
+            get_network_stats(&net_stats);
+            retval = handle_ioctl_data_transfer(cmd, arg, &net_stats, sizeof(net_stats), false, true);
             break;
+        }
             
-        case KAPI_GET_FILE_SYSTEM_INFO:
-            buf_size = sizeof(struct filesystem_info);
-            buffer = kmalloc(buf_size, GFP_KERNEL);
-            if (!buffer) {
-                retval = -ENOMEM;
-                break;
-            }
-            get_filesystem_info((struct filesystem_info *)buffer);
-            if (copy_to_user((void *)arg, buffer, buf_size))
-                retval = -EFAULT;
-            kfree(buffer);
+        case KAPI_GET_FILE_SYSTEM_INFO: {
+            struct filesystem_info fs_info;
+            get_filesystem_info(&fs_info);
+            retval = handle_ioctl_data_transfer(cmd, arg, &fs_info, sizeof(fs_info), false, true);
             break;
+        }
             
-        case KAPI_GET_LOADAVG:
-            buf_size = sizeof(struct loadavg_info);
-            buffer = kmalloc(buf_size, GFP_KERNEL);
-            if (!buffer) {
-                retval = -ENOMEM;
-                break;
-            }
-            get_loadavg_info((struct loadavg_info *)buffer);
-            if (copy_to_user((void *)arg, buffer, buf_size))
-                retval = -EFAULT;
-            kfree(buffer);
+        case KAPI_GET_LOADAVG: {
+            struct loadavg_info load_info;
+            get_loadavg_info(&load_info);
+            retval = handle_ioctl_data_transfer(cmd, arg, &load_info, sizeof(load_info), false, true);
             break;
+        }
             
-        case KAPI_GET_KERNEL_CONFIG:
-            buf_size = sizeof(struct kernel_config);
-            buffer = kmalloc(buf_size, GFP_KERNEL);
-            if (!buffer) {
-                retval = -ENOMEM;
-                break;
-            }
-            get_kernel_config((struct kernel_config *)buffer);
-            if (copy_to_user((void *)arg, buffer, buf_size))
-                retval = -EFAULT;
-            kfree(buffer);
+        case KAPI_GET_KERNEL_CONFIG: {
+            struct kernel_config config;
+            get_kernel_config(&config);
+            retval = handle_ioctl_data_transfer(cmd, arg, &config, sizeof(config), false, true);
             break;
+        }
             
         // خطرناک: کنترل پروسه‌ها
         case KAPI_KILL_PROCESS: {
