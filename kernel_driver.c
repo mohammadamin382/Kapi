@@ -891,7 +891,7 @@ static int write_physical_memory(struct phys_mem_write *mem_write)
     return 0;
 }
 
-// Alternative method using follow_page (more compatible)
+// Alternative method using get_user_pages (kernel 6.x compatible)
 static int virtual_to_physical_alt(struct virt_to_phys *v2p)
 {
     struct task_struct *task;
@@ -899,6 +899,7 @@ static int virtual_to_physical_alt(struct virt_to_phys *v2p)
     struct mm_struct *mm;
     struct page *page;
     unsigned long phys = 0;
+    int ret;
     
     if (v2p->pid == 0) {
         // Kernel virtual address
@@ -934,13 +935,13 @@ static int virtual_to_physical_alt(struct virt_to_phys *v2p)
     mm = task->mm;
     down_read(&mm->mmap_lock);
     
-    // Use follow_page instead of manual page table walk
-    page = follow_page(find_vma(mm, v2p->virt_addr), v2p->virt_addr, FOLL_GET);
-    if (!page) {
+    // Use get_user_pages instead of follow_page (kernel 6.x compatible)
+    ret = get_user_pages_remote(mm, v2p->virt_addr, 1, FOLL_GET, &page, NULL);
+    if (ret != 1) {
         up_read(&mm->mmap_lock);
         put_pid(pid_struct);
         v2p->status = -EFAULT;
-        strcpy(v2p->message, "Virtual address not mapped");
+        strcpy(v2p->message, "Virtual address not mapped or get_user_pages failed");
         return -EFAULT;
     }
     
