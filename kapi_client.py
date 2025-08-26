@@ -219,6 +219,45 @@ class CPUControl(Structure):
         ("message", c_char * 256),
     ]
 
+# Physical memory management structures
+class PhysMemRead(Structure):
+    _fields_ = [
+        ("phys_addr", c_ulong),
+        ("size", c_ulong),
+        ("data", c_char * 4096),
+        ("status", c_int),
+        ("message", c_char * 256),
+    ]
+
+class PhysMemWrite(Structure):
+    _fields_ = [
+        ("phys_addr", c_ulong),
+        ("size", c_ulong),
+        ("data", c_char * 4096),
+        ("status", c_int),
+        ("message", c_char * 256),
+    ]
+
+class VirtToPhys(Structure):
+    _fields_ = [
+        ("virt_addr", c_ulong),
+        ("pid", c_int),
+        ("phys_addr", c_ulong),
+        ("status", c_int),
+        ("message", c_char * 256),
+    ]
+
+class MemPatch(Structure):
+    _fields_ = [
+        ("phys_addr", c_ulong),
+        ("size", c_ulong),
+        ("original_data", c_char * 4096),
+        ("patch_data", c_char * 4096),
+        ("restore", c_int),
+        ("status", c_int),
+        ("message", c_char * 256),
+    ]
+
 def _IOW(magic, number, struct_type):
     return _IOC(1, magic, number, int(sizeof(struct_type)))
 
@@ -248,6 +287,10 @@ KAPI_INJECT_LOG = _IOW(KAPI_IOC_MAGIC, 23, LogInjection)
 KAPI_FORCE_PAGE_RECLAIM = _IO(KAPI_IOC_MAGIC, 24)
 KAPI_SET_CPU_AFFINITY = _IOW(KAPI_IOC_MAGIC, 25, CPUControl)
 KAPI_PANIC_KERNEL = _IO(KAPI_IOC_MAGIC, 26)
+KAPI_READ_PHYS_MEM = _IOWR(KAPI_IOC_MAGIC, 27, PhysMemRead)
+KAPI_WRITE_PHYS_MEM = _IOW(KAPI_IOC_MAGIC, 28, PhysMemWrite)
+KAPI_VIRT_TO_PHYS = _IOWR(KAPI_IOC_MAGIC, 29, VirtToPhys)
+KAPI_PATCH_MEMORY = _IOWR(KAPI_IOC_MAGIC, 30, MemPatch)
 
 class KernelAPIClient:
     """Enhanced client class for communicating with the kernel driver"""
@@ -901,6 +944,105 @@ class KernelAPIClient:
         except OSError as e:
             raise RuntimeError(f"Failed to panic kernel: {e}")
 
+    # 🔥💀 EXTREME DANGER: Physical Memory Management 💀🔥
+    def read_physical_memory(self, phys_addr, size):
+        """💀💀💀 EXTREMELY DANGEROUS: Read from physical memory"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+
+        if size > 4096:
+            raise ValueError("Size cannot exceed 4KB")
+
+        mem_read = PhysMemRead()
+        mem_read.phys_addr = phys_addr
+        mem_read.size = size
+
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_READ_PHYS_MEM, mem_read)
+            return {
+                'status': mem_read.status,
+                'message': mem_read.message.decode('utf-8').strip('\x00'),
+                'data': mem_read.data[:size] if mem_read.status == 0 else b'',
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to read physical memory: {e}")
+
+    def write_physical_memory(self, phys_addr, data):
+        """💀💀💀 EXTREMELY DANGEROUS: Write to physical memory - CAN CORRUPT SYSTEM!"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+
+        if len(data) > 4096:
+            raise ValueError("Data size cannot exceed 4KB")
+
+        print("💀💀💀 WARNING: Writing to physical memory can corrupt the entire system!")
+        print("💀💀💀 This operation can cause immediate system crash or data loss!")
+
+        mem_write = PhysMemWrite()
+        mem_write.phys_addr = phys_addr
+        mem_write.size = len(data)
+        mem_write.data = data
+
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_WRITE_PHYS_MEM, mem_write)
+            return {
+                'status': mem_write.status,
+                'message': mem_write.message.decode('utf-8').strip('\x00'),
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to write physical memory: {e}")
+
+    def virtual_to_physical(self, virt_addr, pid=0):
+        """Convert virtual address to physical address"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+
+        v2p = VirtToPhys()
+        v2p.virt_addr = virt_addr
+        v2p.pid = pid  # 0 for kernel space
+
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_VIRT_TO_PHYS, v2p)
+            return {
+                'virtual_address': v2p.virt_addr,
+                'physical_address': v2p.phys_addr,
+                'pid': v2p.pid,
+                'status': v2p.status,
+                'message': v2p.message.decode('utf-8').strip('\x00'),
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to convert virtual to physical: {e}")
+
+    def patch_memory(self, phys_addr, patch_data, restore=False, original_data=None):
+        """💀💀💀 EXTREMELY DANGEROUS: Patch physical memory"""
+        if not self.is_connected():
+            raise RuntimeError("Not connected to kernel driver")
+
+        if len(patch_data) > 4096:
+            raise ValueError("Patch data size cannot exceed 4KB")
+
+        print("💀💀💀 WARNING: Memory patching can cause system instability!")
+
+        patch = MemPatch()
+        patch.phys_addr = phys_addr
+        patch.size = len(patch_data)
+        patch.restore = 1 if restore else 0
+        
+        if restore and original_data:
+            patch.original_data = original_data
+        else:
+            patch.patch_data = patch_data
+
+        try:
+            fcntl.ioctl(self.device_fd, KAPI_PATCH_MEMORY, patch)
+            return {
+                'status': patch.status,
+                'message': patch.message.decode('utf-8').strip('\x00'),
+                'original_data': patch.original_data[:patch.size] if not restore else None,
+            }
+        except OSError as e:
+            raise RuntimeError(f"Failed to patch memory: {e}")
+
     def get_dangerous_commands(self):
         """Get list of dangerous commands available"""
         return [
@@ -915,7 +1057,11 @@ class KernelAPIClient:
             "inject_kernel_log",
             "force_memory_reclaim",
             "set_cpu_affinity",
-            "panic_kernel"  # 💀
+            "read_physical_memory",     # 💀💀💀
+            "write_physical_memory",    # 💀💀💀
+            "virtual_to_physical",      # 💀
+            "patch_memory",            # 💀💀💀
+            "panic_kernel"             # 💀💀💀
         ]
 
 def format_bytes(bytes_value):
@@ -1105,6 +1251,47 @@ def main():
             print(f"✓ Log injected successfully (check dmesg)")
         except Exception as e:
             print(f"⚠ Log injection failed: {e}")
+
+        # Physical Memory Management Demo
+        print_header("PHYSICAL MEMORY MANAGEMENT DEMO")
+        try:
+            # Test virtual to physical conversion for current process
+            current_pid = os.getpid()
+            # Use stack address as example
+            stack_var = 42
+            stack_addr = id(stack_var)
+            
+            print(f"🔍 Converting virtual address 0x{stack_addr:x} (PID {current_pid})...")
+            v2p_result = client.virtual_to_physical(stack_addr, current_pid)
+            
+            if v2p_result['status'] == 0:
+                phys_addr = v2p_result['physical_address']
+                print(f"✓ Virtual 0x{stack_addr:x} -> Physical 0x{phys_addr:x}")
+                print(f"  Message: {v2p_result['message']}")
+                
+                # Demonstrate reading from physical memory (SAFE - just reading our own data)
+                print(f"\n🔍 Reading 8 bytes from physical address 0x{phys_addr:x}...")
+                try:
+                    read_result = client.read_physical_memory(phys_addr, 8)
+                    if read_result['status'] == 0:
+                        data_hex = ' '.join(f'{b:02x}' for b in read_result['data'])
+                        print(f"✓ Read data: {data_hex}")
+                        print(f"  Message: {read_result['message']}")
+                    else:
+                        print(f"⚠ Read failed: {read_result['message']}")
+                except Exception as e:
+                    print(f"⚠ Physical memory read failed: {e}")
+            else:
+                print(f"⚠ Address conversion failed: {v2p_result['message']}")
+                
+        except Exception as e:
+            print(f"⚠ Physical memory demo failed: {e}")
+
+        print("\n💀💀💀 EXTREME DANGER ZONE 💀💀💀")
+        print("Available but NOT demonstrated (can destroy system):")
+        print("- write_physical_memory(): Can corrupt any system memory")
+        print("- patch_memory(): Can modify kernel code/data in real-time")
+        print("- These functions can cause immediate system crash!")
 
         print("\n⚠️ NOTE: Other dangerous functions are available but not demonstrated")
         print("    for safety reasons. Use them only if you know what you're doing!")
