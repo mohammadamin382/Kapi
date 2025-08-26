@@ -1156,7 +1156,7 @@ static int device_mmap(struct file *file, struct vm_area_struct *vma)
            shared_buffer_phys, pfn, size);
     
     // Set VMA flags for proper memory mapping
-    vma->vm_flags |= VM_IO | VM_DONTEXPAND | VM_DONTDUMP;
+    vm_flags_set(vma, VM_IO | VM_DONTEXPAND | VM_DONTDUMP);
     
     // Use uncached memory for consistent data sharing
     vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
