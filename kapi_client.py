@@ -286,14 +286,24 @@ class KernelAPIClient:
                     self.device_fd, 
                     16384,  # 4 pages * 4KB = 16KB
                     mmap.MAP_SHARED, 
-                    mmap.PROT_READ | mmap.PROT_WRITE, 
-                    offset=0
+                    mmap.PROT_READ | mmap.PROT_WRITE
                 )
                 print("✓ Memory mapped device buffer (16KB)")
             except OSError as e:
                 print(f"⚠ Memory mapping failed with OSError: {e}")
                 print(f"  Error code: {e.errno}")
-                self.shared_memory = None
+                # Try alternative mmap approach
+                try:
+                    self.shared_memory = mmap.mmap(
+                        self.device_fd, 
+                        0,  # Map entire file
+                        mmap.MAP_SHARED, 
+                        mmap.PROT_READ | mmap.PROT_WRITE
+                    )
+                    print("✓ Memory mapped with alternative method")
+                except Exception as e2:
+                    print(f"⚠ Alternative memory mapping also failed: {e2}")
+                    self.shared_memory = None
             except Exception as e:
                 print(f"⚠ Memory mapping failed: {e}")
                 self.shared_memory = None
@@ -562,9 +572,34 @@ class KernelAPIClient:
             raise RuntimeError("Netlink socket not available")
 
         try:
-            self.netlink_socket.send(message.encode('utf-8'))
+            # Create proper netlink message header
+            msg_data = message.encode('utf-8')
+            msg_len = len(msg_data)
+            
+            # Netlink message header (16 bytes)
+            # struct nlmsghdr: len(4) + type(2) + flags(2) + seq(4) + pid(4)
+            nlmsg_len = 16 + msg_len
+            nlmsg_type = 0  # NLMSG_NOOP
+            nlmsg_flags = 0
+            nlmsg_seq = 0
+            nlmsg_pid = os.getpid()
+            
+            header = struct.pack('IHHII', nlmsg_len, nlmsg_type, nlmsg_flags, nlmsg_seq, nlmsg_pid)
+            full_msg = header + msg_data
+            
+            self.netlink_socket.send(full_msg)
+            
+            # Receive response
             response = self.netlink_socket.recv(1024)
-            return response.decode('utf-8')
+            
+            # Parse netlink response
+            if len(response) >= 16:
+                # Skip netlink header (16 bytes) and get message data
+                msg_data = response[16:]
+                return msg_data.decode('utf-8').rstrip('\x00')
+            else:
+                return "Invalid response"
+                
         except Exception as e:
             raise RuntimeError(f"Netlink communication failed: {e}")
 
@@ -574,12 +609,18 @@ class KernelAPIClient:
             raise RuntimeError("Shared memory not available")
 
         try:
-            self.shared_memory.seek(offset)
             if isinstance(data, str):
-                self.shared_memory.write(data.encode('utf-8'))
-            else:
-                self.shared_memory.write(data)
+                data = data.encode('utf-8')
+            
+            if offset + len(data) > len(self.shared_memory):
+                raise RuntimeError(f"Data too large: {len(data)} bytes at offset {offset}")
+            
+            # Write data directly to memory map
+            self.shared_memory[offset:offset+len(data)] = data
+            
+            # Ensure data is written to kernel
             self.shared_memory.flush()
+            
         except Exception as e:
             raise RuntimeError(f"Failed to write to shared memory: {e}")
 
@@ -589,13 +630,21 @@ class KernelAPIClient:
             raise RuntimeError("Shared memory not available")
 
         try:
-            self.shared_memory.seek(offset)
             if size is None:
-                data = self.shared_memory.read()
+                size = len(self.shared_memory) - offset
+            
+            if offset + size > len(self.shared_memory):
+                size = len(self.shared_memory) - offset
+            
+            # Read data directly from memory map
+            data = self.shared_memory[offset:offset+size]
+            
+            # Remove null bytes and decode
+            if isinstance(data, bytes):
+                return data.rstrip(b'\x00').decode('utf-8', errors='ignore')
             else:
-                data = self.shared_memory.read(size)
-
-            return data.rstrip(b'\x00').decode('utf-8')
+                return str(data).rstrip('\x00')
+                
         except Exception as e:
             raise RuntimeError(f"Failed to read from shared memory: {e}")
 
