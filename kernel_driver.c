@@ -1132,11 +1132,14 @@ static int device_mmap(struct file *file, struct vm_area_struct *vma)
 {
     unsigned long size = vma->vm_end - vma->vm_start;
     unsigned long pfn;
+    unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
     
-    printk(KERN_INFO "KAPI: mmap called, size: %lu, buffer_size: %zu\n", size, buffer_size);
+    printk(KERN_INFO "KAPI: mmap called, size: %lu, offset: %lu, buffer_size: %zu\n", 
+           size, offset, buffer_size);
     
-    if (size > buffer_size) {
-        printk(KERN_ERR "KAPI: mmap size %lu exceeds buffer size %zu\n", size, buffer_size);
+    // Check if size is reasonable and aligned
+    if (size > buffer_size || size == 0) {
+        printk(KERN_ERR "KAPI: Invalid mmap size %lu (buffer_size: %zu)\n", size, buffer_size);
         return -EINVAL;
     }
     
@@ -1145,29 +1148,22 @@ static int device_mmap(struct file *file, struct vm_area_struct *vma)
         return -ENOMEM;
     }
     
-    // Check alignment
-    if (vma->vm_start & ~PAGE_MASK) {
-        printk(KERN_ERR "KAPI: vm_start not page aligned: 0x%lx\n", vma->vm_start);
-        return -EINVAL;
-    }
-    
-    if (size & ~PAGE_MASK) {
-        printk(KERN_ERR "KAPI: size not page aligned: %lu\n", size);
-        return -EINVAL;
-    }
+    // Round up size to page boundary
+    size = PAGE_ALIGN(size);
     
     pfn = shared_buffer_phys >> PAGE_SHIFT;
-    printk(KERN_INFO "KAPI: Mapping phys: 0x%lx, pfn: 0x%lx, size: %lu\n", 
+    printk(KERN_INFO "KAPI: Mapping phys: 0x%lx, pfn: 0x%lx, aligned_size: %lu\n", 
            shared_buffer_phys, pfn, size);
     
-    // Set proper VMA flags - compatible with kernel 6.8+
-    vm_flags_set(vma, VM_IO | VM_DONTEXPAND | VM_DONTDUMP);
+    // Set VMA flags for proper memory mapping
+    vma->vm_flags |= VM_IO | VM_DONTEXPAND | VM_DONTDUMP;
     
-    // Use writecombine instead of noncached for better performance
-    vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
+    // Use uncached memory for consistent data sharing
+    vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
     
+    // Map the physical memory to user space
     if (remap_pfn_range(vma, vma->vm_start, pfn, size, vma->vm_page_prot)) {
-        printk(KERN_ERR "KAPI: remap_pfn_range failed for pfn: 0x%lx\n", pfn);
+        printk(KERN_ERR "KAPI: remap_pfn_range failed for pfn: 0x%lx, size: %lu\n", pfn, size);
         return -EAGAIN;
     }
     
@@ -1190,14 +1186,27 @@ static void netlink_recv_msg(struct sk_buff *skb)
     int msg_size;
     char *msg = "Hello from kernel - KAPI driver loaded successfully";
     int res;
+    char *received_msg;
     
-    nlh = (struct nlmsghdr *)skb->data;
+    if (!skb) {
+        printk(KERN_ERR "KAPI: Received NULL skb\n");
+        return;
+    }
+    
+    nlh = nlmsg_hdr(skb);
+    if (!nlh) {
+        printk(KERN_ERR "KAPI: Invalid netlink header\n");
+        return;
+    }
+    
     pid = nlh->nlmsg_pid;
+    received_msg = (char *)nlmsg_data(nlh);
     
-    printk(KERN_INFO "KAPI: Netlink message received from PID %d\n", pid);
+    printk(KERN_INFO "KAPI: Netlink message received from PID %d: '%s'\n", 
+           pid, received_msg ? received_msg : "NULL");
     
-    msg_size = strlen(msg);
-    skb_out = nlmsg_new(msg_size, 0);
+    msg_size = strlen(msg) + 1; // Include null terminator
+    skb_out = nlmsg_new(NLMSG_ALIGN(msg_size), GFP_KERNEL);
     
     if (!skb_out) {
         printk(KERN_ERR "KAPI: Failed to allocate new skb\n");
@@ -1205,12 +1214,21 @@ static void netlink_recv_msg(struct sk_buff *skb)
     }
     
     nlh = nlmsg_put(skb_out, 0, 0, NLMSG_DONE, msg_size, 0);
+    if (!nlh) {
+        printk(KERN_ERR "KAPI: Failed to put netlink message\n");
+        kfree_skb(skb_out);
+        return;
+    }
+    
     NETLINK_CB(skb_out).dst_group = 0;
-    strncpy(nlmsg_data(nlh), msg, msg_size);
+    strcpy(nlmsg_data(nlh), msg);
     
     res = nlmsg_unicast(netlink_sock, skb_out, pid);
-    if (res < 0)
-        printk(KERN_INFO "KAPI: Error while sending back to user\n");
+    if (res < 0) {
+        printk(KERN_ERR "KAPI: Error %d while sending back to user PID %d\n", res, pid);
+    } else {
+        printk(KERN_INFO "KAPI: Successfully sent netlink response to PID %d\n", pid);
+    }
 }
 
 static struct netlink_kernel_cfg cfg = {
@@ -1224,6 +1242,9 @@ static int __init kapi_init(void)
     printk(KERN_INFO "KAPI: Kernel version: %s\n", init_uts_ns.name.release);
     printk(KERN_INFO "KAPI: Architecture: %s\n", init_uts_ns.name.machine);
     
+    // Ensure buffer size is page-aligned
+    buffer_size = PAGE_ALIGN(buffer_size);
+    
     // Allocate shared buffer using __get_free_pages for proper alignment
     shared_buffer = (void *)__get_free_pages(GFP_KERNEL | __GFP_ZERO, get_order(buffer_size));
     if (!shared_buffer) {
@@ -1233,10 +1254,20 @@ static int __init kapi_init(void)
     shared_buffer_phys = virt_to_phys(shared_buffer);
     
     // Verify alignment
-    if (shared_buffer_phys & ~PAGE_MASK) {
+    if (shared_buffer_phys & (PAGE_SIZE - 1)) {
         printk(KERN_ALERT "KAPI: Buffer not page aligned! phys: 0x%lx\n", shared_buffer_phys);
         free_pages((unsigned long)shared_buffer, get_order(buffer_size));
         return -ENOMEM;
+    }
+    
+    // Mark pages as reserved to prevent swapping
+    {
+        int i;
+        unsigned long addr = (unsigned long)shared_buffer;
+        for (i = 0; i < (buffer_size >> PAGE_SHIFT); i++) {
+            SetPageReserved(virt_to_page(addr));
+            addr += PAGE_SIZE;
+        }
     }
     
     printk(KERN_INFO "KAPI: Allocated %zu bytes for shared buffer at virt: %p, phys: 0x%lx\n", 
@@ -1318,6 +1349,15 @@ static void __exit kapi_exit(void)
     }
     
     if (shared_buffer) {
+        // Unreserve pages before freeing
+        {
+            int i;
+            unsigned long addr = (unsigned long)shared_buffer;
+            for (i = 0; i < (buffer_size >> PAGE_SHIFT); i++) {
+                ClearPageReserved(virt_to_page(addr));
+                addr += PAGE_SIZE;
+            }
+        }
         free_pages((unsigned long)shared_buffer, get_order(buffer_size));
         printk(KERN_INFO "KAPI: Shared buffer freed\n");
     }
