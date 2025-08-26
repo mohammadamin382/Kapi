@@ -1211,263 +1211,326 @@ static int handle_ioctl_data_transfer(unsigned int cmd, unsigned long arg,
 static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
     int retval = 0;
+    void *data_ptr = NULL;
+    size_t data_size = 0;
     
     if (_IOC_TYPE(cmd) != KAPI_IOC_MAGIC) return -ENOTTY;
     if (_IOC_NR(cmd) > KAPI_IOC_MAXNR) return -ENOTTY;
     
     printk(KERN_INFO "KAPI: IOCTL command %u received\n", cmd);
     
+    // Allocate memory based on command
+    switch (cmd) {
+        case KAPI_GET_MEMORY_INFO:
+            data_size = sizeof(struct memory_info);
+            break;
+        case KAPI_GET_CPU_INFO:
+            data_size = sizeof(struct cpu_info);
+            break;
+        case KAPI_GET_PROCESS_INFO:
+            data_size = sizeof(struct process_info);
+            break;
+        case KAPI_EXECUTE_KERNEL_CMD:
+            data_size = sizeof(struct kernel_cmd);
+            break;
+        case KAPI_GET_NETWORK_STATS:
+            data_size = sizeof(struct network_stats);
+            break;
+        case KAPI_GET_FILE_SYSTEM_INFO:
+            data_size = sizeof(struct filesystem_info);
+            break;
+        case KAPI_GET_LOADAVG:
+            data_size = sizeof(struct loadavg_info);
+            break;
+        case KAPI_GET_KERNEL_CONFIG:
+            data_size = sizeof(struct kernel_config);
+            break;
+        case KAPI_KILL_PROCESS:
+        case KAPI_SUSPEND_PROCESS:
+        case KAPI_RESUME_PROCESS:
+            data_size = sizeof(struct process_control);
+            break;
+        case KAPI_LOAD_MODULE:
+        case KAPI_UNLOAD_MODULE:
+            data_size = sizeof(struct module_control);
+            break;
+        case KAPI_TOGGLE_INTERFACE:
+            data_size = sizeof(struct net_control);
+            break;
+        case KAPI_MOUNT_FS:
+        case KAPI_UMOUNT_FS:
+            data_size = sizeof(struct fs_control);
+            break;
+        case KAPI_INJECT_LOG:
+            data_size = sizeof(struct log_injection);
+            break;
+        case KAPI_SET_CPU_AFFINITY:
+            data_size = sizeof(struct cpu_control);
+            break;
+        case KAPI_READ_PHYS_MEM:
+            data_size = sizeof(struct phys_mem_read);
+            break;
+        case KAPI_WRITE_PHYS_MEM:
+            data_size = sizeof(struct phys_mem_write);
+            break;
+        case KAPI_VIRT_TO_PHYS:
+            data_size = sizeof(struct virt_to_phys);
+            break;
+        case KAPI_PATCH_MEMORY:
+            data_size = sizeof(struct mem_patch);
+            break;
+        case KAPI_FORCE_PAGE_RECLAIM:
+        case KAPI_PANIC_KERNEL:
+            data_size = 0; // No data needed
+            break;
+        default:
+            return -ENOTTY;
+    }
+    
+    // Allocate memory on heap if needed
+    if (data_size > 0) {
+        data_ptr = kzalloc(data_size, GFP_KERNEL);
+        if (!data_ptr) {
+            printk(KERN_ERR "KAPI: Failed to allocate %zu bytes for ioctl\n", data_size);
+            return -ENOMEM;
+        }
+    }
+    
     switch (cmd) {
         case KAPI_GET_MEMORY_INFO: {
-            struct memory_info mem_info;
-            get_memory_info(&mem_info);
-            retval = handle_ioctl_data_transfer(cmd, arg, &mem_info, sizeof(mem_info), false, true);
+            struct memory_info *mem_info = (struct memory_info *)data_ptr;
+            get_memory_info(mem_info);
+            retval = copy_to_user((void *)arg, mem_info, sizeof(*mem_info)) ? -EFAULT : 0;
             break;
         }
             
         case KAPI_GET_CPU_INFO: {
-            struct cpu_info cpu_info;
-            get_cpu_info(&cpu_info);
-            retval = handle_ioctl_data_transfer(cmd, arg, &cpu_info, sizeof(cpu_info), false, true);
+            struct cpu_info *cpu_info = (struct cpu_info *)data_ptr;
+            get_cpu_info(cpu_info);
+            retval = copy_to_user((void *)arg, cpu_info, sizeof(*cpu_info)) ? -EFAULT : 0;
             break;
         }
             
         case KAPI_GET_PROCESS_INFO: {
-            struct process_info proc_info;
-            retval = handle_ioctl_data_transfer(cmd, arg, &proc_info, sizeof(proc_info), true, false);
-            if (retval == 0) {
-                get_process_info(&proc_info, proc_info.pid);
-                retval = handle_ioctl_data_transfer(cmd, arg, &proc_info, sizeof(proc_info), false, true);
+            struct process_info *proc_info = (struct process_info *)data_ptr;
+            if (copy_from_user(proc_info, (void *)arg, sizeof(*proc_info))) {
+                retval = -EFAULT;
+                break;
             }
+            get_process_info(proc_info, proc_info->pid);
+            retval = copy_to_user((void *)arg, proc_info, sizeof(*proc_info)) ? -EFAULT : 0;
             break;
         }
             
         case KAPI_EXECUTE_KERNEL_CMD: {
-            struct kernel_cmd kcmd;
-            retval = handle_ioctl_data_transfer(cmd, arg, &kcmd, sizeof(kcmd), true, false);
-            if (retval == 0) {
-                execute_kernel_command(&kcmd);
-                retval = handle_ioctl_data_transfer(cmd, arg, &kcmd, sizeof(kcmd), false, true);
+            struct kernel_cmd *kcmd = (struct kernel_cmd *)data_ptr;
+            if (copy_from_user(kcmd, (void *)arg, sizeof(*kcmd))) {
+                retval = -EFAULT;
+                break;
             }
+            execute_kernel_command(kcmd);
+            retval = copy_to_user((void *)arg, kcmd, sizeof(*kcmd)) ? -EFAULT : 0;
             break;
         }
             
         case KAPI_GET_NETWORK_STATS: {
-            struct network_stats net_stats;
-            get_network_stats(&net_stats);
-            retval = handle_ioctl_data_transfer(cmd, arg, &net_stats, sizeof(net_stats), false, true);
+            struct network_stats *net_stats = (struct network_stats *)data_ptr;
+            get_network_stats(net_stats);
+            retval = copy_to_user((void *)arg, net_stats, sizeof(*net_stats)) ? -EFAULT : 0;
             break;
         }
             
         case KAPI_GET_FILE_SYSTEM_INFO: {
-            struct filesystem_info fs_info;
-            get_filesystem_info(&fs_info);
-            retval = handle_ioctl_data_transfer(cmd, arg, &fs_info, sizeof(fs_info), false, true);
+            struct filesystem_info *fs_info = (struct filesystem_info *)data_ptr;
+            get_filesystem_info(fs_info);
+            retval = copy_to_user((void *)arg, fs_info, sizeof(*fs_info)) ? -EFAULT : 0;
             break;
         }
             
         case KAPI_GET_LOADAVG: {
-            struct loadavg_info load_info;
-            get_loadavg_info(&load_info);
-            retval = handle_ioctl_data_transfer(cmd, arg, &load_info, sizeof(load_info), false, true);
+            struct loadavg_info *load_info = (struct loadavg_info *)data_ptr;
+            get_loadavg_info(load_info);
+            retval = copy_to_user((void *)arg, load_info, sizeof(*load_info)) ? -EFAULT : 0;
             break;
         }
             
         case KAPI_GET_KERNEL_CONFIG: {
-            struct kernel_config config;
-            get_kernel_config(&config);
-            retval = handle_ioctl_data_transfer(cmd, arg, &config, sizeof(config), false, true);
+            struct kernel_config *config = (struct kernel_config *)data_ptr;
+            get_kernel_config(config);
+            retval = copy_to_user((void *)arg, config, sizeof(*config)) ? -EFAULT : 0;
             break;
         }
             
-        // خطرناک: کنترل پروسه‌ها
         case KAPI_KILL_PROCESS: {
-            struct process_control proc_ctrl;
-            if (copy_from_user(&proc_ctrl, (void *)arg, sizeof(proc_ctrl))) {
+            struct process_control *proc_ctrl = (struct process_control *)data_ptr;
+            if (copy_from_user(proc_ctrl, (void *)arg, sizeof(*proc_ctrl))) {
                 retval = -EFAULT;
                 break;
             }
-            kill_process_by_pid(&proc_ctrl);
-            if (copy_to_user((void *)arg, &proc_ctrl, sizeof(proc_ctrl)))
-                retval = -EFAULT;
+            kill_process_by_pid(proc_ctrl);
+            retval = copy_to_user((void *)arg, proc_ctrl, sizeof(*proc_ctrl)) ? -EFAULT : 0;
             break;
         }
         
         case KAPI_SUSPEND_PROCESS: {
-            struct process_control proc_ctrl;
-            if (copy_from_user(&proc_ctrl, (void *)arg, sizeof(proc_ctrl))) {
+            struct process_control *proc_ctrl = (struct process_control *)data_ptr;
+            if (copy_from_user(proc_ctrl, (void *)arg, sizeof(*proc_ctrl))) {
                 retval = -EFAULT;
                 break;
             }
-            suspend_resume_process(&proc_ctrl, true);
-            if (copy_to_user((void *)arg, &proc_ctrl, sizeof(proc_ctrl)))
-                retval = -EFAULT;
+            suspend_resume_process(proc_ctrl, true);
+            retval = copy_to_user((void *)arg, proc_ctrl, sizeof(*proc_ctrl)) ? -EFAULT : 0;
             break;
         }
         
         case KAPI_RESUME_PROCESS: {
-            struct process_control proc_ctrl;
-            if (copy_from_user(&proc_ctrl, (void *)arg, sizeof(proc_ctrl))) {
+            struct process_control *proc_ctrl = (struct process_control *)data_ptr;
+            if (copy_from_user(proc_ctrl, (void *)arg, sizeof(*proc_ctrl))) {
                 retval = -EFAULT;
                 break;
             }
-            suspend_resume_process(&proc_ctrl, false);
-            if (copy_to_user((void *)arg, &proc_ctrl, sizeof(proc_ctrl)))
-                retval = -EFAULT;
+            suspend_resume_process(proc_ctrl, false);
+            retval = copy_to_user((void *)arg, proc_ctrl, sizeof(*proc_ctrl)) ? -EFAULT : 0;
             break;
         }
         
-        // خطرناک: مدیریت ماژول‌ها
         case KAPI_LOAD_MODULE: {
-            struct module_control mod_ctrl;
-            if (copy_from_user(&mod_ctrl, (void *)arg, sizeof(mod_ctrl))) {
+            struct module_control *mod_ctrl = (struct module_control *)data_ptr;
+            if (copy_from_user(mod_ctrl, (void *)arg, sizeof(*mod_ctrl))) {
                 retval = -EFAULT;
                 break;
             }
-            load_kernel_module(&mod_ctrl);
-            if (copy_to_user((void *)arg, &mod_ctrl, sizeof(mod_ctrl)))
-                retval = -EFAULT;
+            load_kernel_module(mod_ctrl);
+            retval = copy_to_user((void *)arg, mod_ctrl, sizeof(*mod_ctrl)) ? -EFAULT : 0;
             break;
         }
         
         case KAPI_UNLOAD_MODULE: {
-            struct module_control mod_ctrl;
-            if (copy_from_user(&mod_ctrl, (void *)arg, sizeof(mod_ctrl))) {
+            struct module_control *mod_ctrl = (struct module_control *)data_ptr;
+            if (copy_from_user(mod_ctrl, (void *)arg, sizeof(*mod_ctrl))) {
                 retval = -EFAULT;
                 break;
             }
-            unload_kernel_module(&mod_ctrl);
-            if (copy_to_user((void *)arg, &mod_ctrl, sizeof(mod_ctrl)))
-                retval = -EFAULT;
+            unload_kernel_module(mod_ctrl);
+            retval = copy_to_user((void *)arg, mod_ctrl, sizeof(*mod_ctrl)) ? -EFAULT : 0;
             break;
         }
         
-        // خطرناک: شبکه
         case KAPI_TOGGLE_INTERFACE: {
-            struct net_control net_ctrl;
-            if (copy_from_user(&net_ctrl, (void *)arg, sizeof(net_ctrl))) {
+            struct net_control *net_ctrl = (struct net_control *)data_ptr;
+            if (copy_from_user(net_ctrl, (void *)arg, sizeof(*net_ctrl))) {
                 retval = -EFAULT;
                 break;
             }
-            toggle_network_interface(&net_ctrl);
-            if (copy_to_user((void *)arg, &net_ctrl, sizeof(net_ctrl)))
-                retval = -EFAULT;
+            toggle_network_interface(net_ctrl);
+            retval = copy_to_user((void *)arg, net_ctrl, sizeof(*net_ctrl)) ? -EFAULT : 0;
             break;
         }
         
-        // خطرناک: فایل‌سیستم
         case KAPI_MOUNT_FS: {
-            struct fs_control fs_ctrl;
-            if (copy_from_user(&fs_ctrl, (void *)arg, sizeof(fs_ctrl))) {
+            struct fs_control *fs_ctrl = (struct fs_control *)data_ptr;
+            if (copy_from_user(fs_ctrl, (void *)arg, sizeof(*fs_ctrl))) {
                 retval = -EFAULT;
                 break;
             }
-            mount_filesystem(&fs_ctrl);
-            if (copy_to_user((void *)arg, &fs_ctrl, sizeof(fs_ctrl)))
-                retval = -EFAULT;
+            mount_filesystem(fs_ctrl);
+            retval = copy_to_user((void *)arg, fs_ctrl, sizeof(*fs_ctrl)) ? -EFAULT : 0;
             break;
         }
         
         case KAPI_UMOUNT_FS: {
-            struct fs_control fs_ctrl;
-            if (copy_from_user(&fs_ctrl, (void *)arg, sizeof(fs_ctrl))) {
+            struct fs_control *fs_ctrl = (struct fs_control *)data_ptr;
+            if (copy_from_user(fs_ctrl, (void *)arg, sizeof(*fs_ctrl))) {
                 retval = -EFAULT;
                 break;
             }
-            unmount_filesystem(&fs_ctrl);
-            if (copy_to_user((void *)arg, &fs_ctrl, sizeof(fs_ctrl)))
-                retval = -EFAULT;
+            unmount_filesystem(fs_ctrl);
+            retval = copy_to_user((void *)arg, fs_ctrl, sizeof(*fs_ctrl)) ? -EFAULT : 0;
             break;
         }
         
-        // خطرناک: تزریق لاگ
         case KAPI_INJECT_LOG: {
-            struct log_injection log_inj;
-            if (copy_from_user(&log_inj, (void *)arg, sizeof(log_inj))) {
+            struct log_injection *log_inj = (struct log_injection *)data_ptr;
+            if (copy_from_user(log_inj, (void *)arg, sizeof(*log_inj))) {
                 retval = -EFAULT;
                 break;
             }
-            inject_kernel_log(&log_inj);
-            if (copy_to_user((void *)arg, &log_inj, sizeof(log_inj)))
-                retval = -EFAULT;
+            inject_kernel_log(log_inj);
+            retval = copy_to_user((void *)arg, log_inj, sizeof(*log_inj)) ? -EFAULT : 0;
             break;
         }
         
-        // خطرناک: فورس memory reclaim
         case KAPI_FORCE_PAGE_RECLAIM:
             retval = force_memory_reclaim();
             break;
             
-        // خطرناک: CPU affinity
         case KAPI_SET_CPU_AFFINITY: {
-            struct cpu_control cpu_ctrl;
-            if (copy_from_user(&cpu_ctrl, (void *)arg, sizeof(cpu_ctrl))) {
+            struct cpu_control *cpu_ctrl = (struct cpu_control *)data_ptr;
+            if (copy_from_user(cpu_ctrl, (void *)arg, sizeof(*cpu_ctrl))) {
                 retval = -EFAULT;
                 break;
             }
-            set_process_cpu_affinity(&cpu_ctrl);
-            if (copy_to_user((void *)arg, &cpu_ctrl, sizeof(cpu_ctrl)))
-                retval = -EFAULT;
+            set_process_cpu_affinity(cpu_ctrl);
+            retval = copy_to_user((void *)arg, cpu_ctrl, sizeof(*cpu_ctrl)) ? -EFAULT : 0;
             break;
         }
         
-        // خطرناک ترین: Kernel Panic! 💀
         case KAPI_PANIC_KERNEL:
             printk(KERN_CRIT "KAPI: User requested kernel panic! System going down...\n");
             trigger_kernel_panic();
-            break; // هرگز اینجا نمی‌رسه 😅
+            break;
             
-        // 🔥 خطرناک: مدیریت حافظه فیزیکی
         case KAPI_READ_PHYS_MEM: {
-            struct phys_mem_read mem_read;
-            if (copy_from_user(&mem_read, (void *)arg, sizeof(mem_read))) {
+            struct phys_mem_read *mem_read = (struct phys_mem_read *)data_ptr;
+            if (copy_from_user(mem_read, (void *)arg, sizeof(*mem_read))) {
                 retval = -EFAULT;
                 break;
             }
-            read_physical_memory(&mem_read);
-            if (copy_to_user((void *)arg, &mem_read, sizeof(mem_read)))
-                retval = -EFAULT;
+            read_physical_memory(mem_read);
+            retval = copy_to_user((void *)arg, mem_read, sizeof(*mem_read)) ? -EFAULT : 0;
             break;
         }
         
         case KAPI_WRITE_PHYS_MEM: {
-            struct phys_mem_write mem_write;
-            if (copy_from_user(&mem_write, (void *)arg, sizeof(mem_write))) {
+            struct phys_mem_write *mem_write = (struct phys_mem_write *)data_ptr;
+            if (copy_from_user(mem_write, (void *)arg, sizeof(*mem_write))) {
                 retval = -EFAULT;
                 break;
             }
-            write_physical_memory(&mem_write);
-            if (copy_to_user((void *)arg, &mem_write, sizeof(mem_write)))
-                retval = -EFAULT;
+            write_physical_memory(mem_write);
+            retval = copy_to_user((void *)arg, mem_write, sizeof(*mem_write)) ? -EFAULT : 0;
             break;
         }
         
         case KAPI_VIRT_TO_PHYS: {
-            struct virt_to_phys v2p;
-            if (copy_from_user(&v2p, (void *)arg, sizeof(v2p))) {
+            struct virt_to_phys *v2p = (struct virt_to_phys *)data_ptr;
+            if (copy_from_user(v2p, (void *)arg, sizeof(*v2p))) {
                 retval = -EFAULT;
                 break;
             }
-            virtual_to_physical(&v2p);
-            if (copy_to_user((void *)arg, &v2p, sizeof(v2p)))
-                retval = -EFAULT;
+            virtual_to_physical(v2p);
+            retval = copy_to_user((void *)arg, v2p, sizeof(*v2p)) ? -EFAULT : 0;
             break;
         }
         
         case KAPI_PATCH_MEMORY: {
-            struct mem_patch patch;
-            if (copy_from_user(&patch, (void *)arg, sizeof(patch))) {
+            struct mem_patch *patch = (struct mem_patch *)data_ptr;
+            if (copy_from_user(patch, (void *)arg, sizeof(*patch))) {
                 retval = -EFAULT;
                 break;
             }
-            patch_memory(&patch);
-            if (copy_to_user((void *)arg, &patch, sizeof(patch)))
-                retval = -EFAULT;
+            patch_memory(patch);
+            retval = copy_to_user((void *)arg, patch, sizeof(*patch)) ? -EFAULT : 0;
             break;
         }
             
         default:
             retval = -ENOTTY;
+    }
+    
+    // Free allocated memory
+    if (data_ptr) {
+        kfree(data_ptr);
     }
     
     return retval;
