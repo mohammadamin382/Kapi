@@ -391,15 +391,34 @@ static struct file_operations fops = {
 // Memory management functions
 static void get_memory_info(struct memory_info *mem_info)
 {
-    get_detailed_memory_stats(mem_info);
+    struct sysinfo si;
+    si_meminfo(&si);
+    
+    mem_info->total_ram = si.totalram << PAGE_SHIFT;
+    mem_info->free_ram = si.freeram << PAGE_SHIFT;
+    mem_info->used_ram = (si.totalram - si.freeram) << PAGE_SHIFT;
+    mem_info->buffers = si.bufferram << PAGE_SHIFT;
+    mem_info->cached = global_node_page_state(NR_FILE_PAGES) << PAGE_SHIFT;
+    mem_info->swap_total = si.totalswap << PAGE_SHIFT;
+    mem_info->swap_free = si.freeswap << PAGE_SHIFT;
+    mem_info->slab = global_node_page_state(NR_SLAB_RECLAIMABLE_B) + 
+                     global_node_page_state(NR_SLAB_UNRECLAIMABLE_B);
+    mem_info->page_tables = global_node_page_state(NR_PAGETABLE);
+    mem_info->vmalloc_used = 0; // Simplified
+    mem_info->committed_as = 0; // Use sysinfo instead of internal symbol
+    mem_info->dirty = global_node_page_state(NR_FILE_DIRTY) << PAGE_SHIFT;
+    mem_info->writeback = global_node_page_state(NR_WRITEBACK) << PAGE_SHIFT;
+    mem_info->anon_pages = global_node_page_state(NR_ANON_MAPPED) << PAGE_SHIFT;
+    mem_info->mapped = global_node_page_state(NR_FILE_MAPPED) << PAGE_SHIFT;
+    mem_info->shmem = global_node_page_state(NR_SHMEM) << PAGE_SHIFT;
 }
 
 static void get_cpu_info(struct cpu_info *cpu_info)
 {
     cpu_info->num_cpus = num_possible_cpus();
     cpu_info->num_online_cpus = num_online_cpus();
-    cpu_info->cpu_freq = get_cpu_frequency(); // Enhanced frequency detection
-    strcpy(cpu_info->cpu_model, "Enhanced x86_64");
+    cpu_info->cpu_freq = 0; // Would need cpufreq subsystem
+    strcpy(cpu_info->cpu_model, "Generic x86_64");
     cpu_info->uptime = ktime_get_boottime_seconds();
     cpu_info->idle_time = 0; // Simplified
     cpu_info->user_time = 0;
@@ -1144,13 +1163,14 @@ static ssize_t device_read(struct file *filep, char *buffer, size_t len, loff_t 
     if (*offset + len > buffer_size)
         len = buffer_size - *offset;
     
-    // Use optimized copy for performance
     error_count = copy_to_user(buffer, shared_buffer + *offset, len);
     
     if (error_count == 0) {
         *offset += len;
+        printk(KERN_INFO "KAPI: Sent %zu bytes to user\n", len);
         return len;
     } else {
+        printk(KERN_ERR "KAPI: Failed to send %d bytes to user\n", error_count);
         return -EFAULT;
     }
 }
@@ -1165,13 +1185,14 @@ static ssize_t device_write(struct file *filep, const char *buffer, size_t len, 
     if (*offset + len > buffer_size)
         len = buffer_size - *offset;
     
-    // Use optimized copy for performance
     error_count = copy_from_user(shared_buffer + *offset, buffer, len);
     
     if (error_count == 0) {
         *offset += len;
+        printk(KERN_INFO "KAPI: Received %zu bytes from user\n", len);
         return len;
     } else {
+        printk(KERN_ERR "KAPI: Failed to receive %d bytes from user\n", error_count);
         return -EFAULT;
     }
 }
@@ -1622,75 +1643,12 @@ static struct netlink_kernel_cfg cfg = {
     .input = netlink_recv_msg,
 };
 
-// Additional exports for enhanced functionality
-static void get_detailed_memory_stats(struct memory_info *mem_info)
-{
-    struct sysinfo si;
-    si_meminfo(&si);
-    si_swapinfo(&si);
-    
-    mem_info->total_ram = si.totalram << PAGE_SHIFT;
-    mem_info->free_ram = si.freeram << PAGE_SHIFT;
-    mem_info->used_ram = (si.totalram - si.freeram) << PAGE_SHIFT;
-    mem_info->buffers = si.bufferram << PAGE_SHIFT;
-    mem_info->cached = global_node_page_state(NR_FILE_PAGES) << PAGE_SHIFT;
-    mem_info->swap_total = si.totalswap << PAGE_SHIFT;
-    mem_info->swap_free = si.freeswap << PAGE_SHIFT;
-    mem_info->slab = global_node_page_state(NR_SLAB_RECLAIMABLE_B) + 
-                     global_node_page_state(NR_SLAB_UNRECLAIMABLE_B);
-    mem_info->page_tables = global_node_page_state(NR_PAGETABLE) << PAGE_SHIFT;
-    mem_info->vmalloc_used = vmalloc_nr_pages() << PAGE_SHIFT;
-    mem_info->committed_as = percpu_counter_read_positive(&vm_committed_as) << PAGE_SHIFT;
-    mem_info->dirty = global_node_page_state(NR_FILE_DIRTY) << PAGE_SHIFT;
-    mem_info->writeback = global_node_page_state(NR_WRITEBACK) << PAGE_SHIFT;
-    mem_info->anon_pages = global_node_page_state(NR_ANON_MAPPED) << PAGE_SHIFT;
-    mem_info->mapped = global_node_page_state(NR_FILE_MAPPED) << PAGE_SHIFT;
-    mem_info->shmem = global_node_page_state(NR_SHMEM) << PAGE_SHIFT;
-}
-
-// Enhanced CPU frequency detection
-static unsigned long get_cpu_frequency(void)
-{
-    struct cpufreq_policy *policy;
-    unsigned long freq = 0;
-    
-    policy = cpufreq_cpu_get(0);
-    if (policy) {
-        freq = policy->cur;
-        cpufreq_cpu_put(policy);
-    }
-    return freq;
-}
-
-// Performance-optimized buffer operations
-static inline void fast_memory_copy(void *dest, const void *src, size_t size)
-{
-    if (size <= 16) {
-        memcpy(dest, src, size);
-    } else {
-        // Use optimized copy for larger buffers
-        unsigned long *ldest = (unsigned long *)dest;
-        const unsigned long *lsrc = (const unsigned long *)src;
-        size_t longs = size / sizeof(unsigned long);
-        size_t remainder = size % sizeof(unsigned long);
-        
-        while (longs--) {
-            *ldest++ = *lsrc++;
-        }
-        
-        if (remainder) {
-            memcpy(ldest, lsrc, remainder);
-        }
-    }
-}
-
 // Module initialization
 static int __init kapi_init(void)
 {
-    printk(KERN_INFO "KAPI: Initializing Enhanced Kernel API Exporter v3.0\n");
+    printk(KERN_INFO "KAPI: Initializing Kernel API Exporter v2.0\n");
     printk(KERN_INFO "KAPI: Kernel version: %s\n", init_uts_ns.name.release);
     printk(KERN_INFO "KAPI: Architecture: %s\n", init_uts_ns.name.machine);
-    printk(KERN_INFO "KAPI: Performance optimizations enabled\n");
     
     // Ensure buffer size is page-aligned
     buffer_size = PAGE_ALIGN(buffer_size);
@@ -1820,6 +1778,6 @@ module_exit(kapi_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("KAPI Development Team");
-MODULE_DESCRIPTION("Enhanced Performance Kernel API Exporter for Linux 6.x - Advanced kernel functions with optimizations");
-MODULE_VERSION("3.0");
+MODULE_DESCRIPTION("Advanced Kernel API Exporter for Linux 6.x - Exports kernel functions to userland");
+MODULE_VERSION("2.0");
 MODULE_ALIAS("kapi");
