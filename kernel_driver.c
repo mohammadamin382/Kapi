@@ -74,7 +74,11 @@
 #define KAPI_FORCE_PAGE_RECLAIM   _IO(KAPI_IOC_MAGIC, 24)
 #define KAPI_SET_CPU_AFFINITY     _IOW(KAPI_IOC_MAGIC, 25, struct cpu_control)
 #define KAPI_PANIC_KERNEL         _IO(KAPI_IOC_MAGIC, 26)
-#define KAPI_IOC_MAXNR 26
+#define KAPI_READ_PHYS_MEM        _IOWR(KAPI_IOC_MAGIC, 27, struct phys_mem_read)
+#define KAPI_WRITE_PHYS_MEM       _IOW(KAPI_IOC_MAGIC, 28, struct phys_mem_write)
+#define KAPI_VIRT_TO_PHYS         _IOWR(KAPI_IOC_MAGIC, 29, struct virt_to_phys)
+#define KAPI_PATCH_MEMORY         _IOWR(KAPI_IOC_MAGIC, 30, struct mem_patch)
+#define KAPI_IOC_MAXNR 30
 
 // Data structures for communication
 struct memory_info {
@@ -305,6 +309,41 @@ struct log_injection {
 struct cpu_control {
     int pid;
     unsigned long mask;
+    int status;
+    char message[256];
+};
+
+// Physical memory management structures
+struct phys_mem_read {
+    unsigned long phys_addr;
+    unsigned long size;
+    char data[4096];  // Max 4KB per read
+    int status;
+    char message[256];
+};
+
+struct phys_mem_write {
+    unsigned long phys_addr;
+    unsigned long size;
+    char data[4096];  // Max 4KB per write
+    int status;
+    char message[256];
+};
+
+struct virt_to_phys {
+    unsigned long virt_addr;
+    int pid;
+    unsigned long phys_addr;
+    int status;
+    char message[256];
+};
+
+struct mem_patch {
+    unsigned long phys_addr;
+    unsigned long size;
+    char original_data[4096];
+    char patch_data[4096];
+    int restore;  // 0 = patch, 1 = restore
     int status;
     char message[256];
 };
@@ -763,6 +802,220 @@ static void trigger_kernel_panic(void)
     panic("KAPI: Deliberate kernel panic triggered by user! 💀");
 }
 
+// 🔥 خطرناک: مدیریت حافظه فیزیکی
+static int read_physical_memory(struct phys_mem_read *mem_read)
+{
+    void *virt_addr;
+    
+    if (mem_read->size > 4096) {
+        mem_read->status = -EINVAL;
+        strcpy(mem_read->message, "Size too large (max 4KB)");
+        return -EINVAL;
+    }
+    
+    // Check if physical address is valid
+    if (!pfn_valid(mem_read->phys_addr >> PAGE_SHIFT)) {
+        mem_read->status = -EINVAL;
+        strcpy(mem_read->message, "Invalid physical address");
+        return -EINVAL;
+    }
+    
+    // Map physical address to virtual
+    virt_addr = phys_to_virt(mem_read->phys_addr);
+    if (!virt_addr) {
+        mem_read->status = -ENOMEM;
+        strcpy(mem_read->message, "Failed to map physical address");
+        return -ENOMEM;
+    }
+    
+    // Read from physical memory
+    memcpy(mem_read->data, virt_addr, mem_read->size);
+    
+    mem_read->status = 0;
+    snprintf(mem_read->message, sizeof(mem_read->message), 
+             "Read %lu bytes from phys 0x%lx", mem_read->size, mem_read->phys_addr);
+    
+    printk(KERN_WARNING "KAPI: Read %lu bytes from physical memory 0x%lx\n", 
+           mem_read->size, mem_read->phys_addr);
+    
+    return 0;
+}
+
+static int write_physical_memory(struct phys_mem_write *mem_write)
+{
+    void *virt_addr;
+    
+    if (mem_write->size > 4096) {
+        mem_write->status = -EINVAL;
+        strcpy(mem_write->message, "Size too large (max 4KB)");
+        return -EINVAL;
+    }
+    
+    // Check if physical address is valid
+    if (!pfn_valid(mem_write->phys_addr >> PAGE_SHIFT)) {
+        mem_write->status = -EINVAL;
+        strcpy(mem_write->message, "Invalid physical address");
+        return -EINVAL;
+    }
+    
+    // Map physical address to virtual
+    virt_addr = phys_to_virt(mem_write->phys_addr);
+    if (!virt_addr) {
+        mem_write->status = -ENOMEM;
+        strcpy(mem_write->message, "Failed to map physical address");
+        return -ENOMEM;
+    }
+    
+    // Write to physical memory (خطرناک!)
+    memcpy(virt_addr, mem_write->data, mem_write->size);
+    
+    mem_write->status = 0;
+    snprintf(mem_write->message, sizeof(mem_write->message), 
+             "Wrote %lu bytes to phys 0x%lx", mem_write->size, mem_write->phys_addr);
+    
+    printk(KERN_WARNING "KAPI: Wrote %lu bytes to physical memory 0x%lx\n", 
+           mem_write->size, mem_write->phys_addr);
+    
+    return 0;
+}
+
+static int virtual_to_physical(struct virt_to_phys *v2p)
+{
+    struct task_struct *task;
+    struct pid *pid_struct;
+    struct mm_struct *mm;
+    pgd_t *pgd;
+    p4d_t *p4d;
+    pud_t *pud;
+    pmd_t *pmd;
+    pte_t *pte;
+    unsigned long phys = 0;
+    
+    if (v2p->pid == 0) {
+        // Kernel virtual address
+        if (virt_addr_valid(v2p->virt_addr)) {
+            v2p->phys_addr = virt_to_phys((void *)v2p->virt_addr);
+            v2p->status = 0;
+            snprintf(v2p->message, sizeof(v2p->message), 
+                     "Kernel virt 0x%lx -> phys 0x%lx", v2p->virt_addr, v2p->phys_addr);
+            return 0;
+        } else {
+            v2p->status = -EINVAL;
+            strcpy(v2p->message, "Invalid kernel virtual address");
+            return -EINVAL;
+        }
+    }
+    
+    // User space virtual address
+    pid_struct = find_get_pid(v2p->pid);
+    if (!pid_struct) {
+        v2p->status = -ESRCH;
+        strcpy(v2p->message, "Process not found");
+        return -ESRCH;
+    }
+    
+    task = pid_task(pid_struct, PIDTYPE_PID);
+    if (!task || !task->mm) {
+        put_pid(pid_struct);
+        v2p->status = -ESRCH;
+        strcpy(v2p->message, "Task or mm_struct not found");
+        return -ESRCH;
+    }
+    
+    mm = task->mm;
+    down_read(&mm->mmap_lock);
+    
+    // Walk page tables
+    pgd = pgd_offset(mm, v2p->virt_addr);
+    if (pgd_none(*pgd) || pgd_bad(*pgd))
+        goto not_found;
+    
+    p4d = p4d_offset(pgd, v2p->virt_addr);
+    if (p4d_none(*p4d) || p4d_bad(*p4d))
+        goto not_found;
+    
+    pud = pud_offset(p4d, v2p->virt_addr);
+    if (pud_none(*pud) || pud_bad(*pud))
+        goto not_found;
+    
+    pmd = pmd_offset(pud, v2p->virt_addr);
+    if (pmd_none(*pmd) || pmd_bad(*pmd))
+        goto not_found;
+    
+    pte = pte_offset_map(pmd, v2p->virt_addr);
+    if (!pte || pte_none(*pte))
+        goto not_found_unmap;
+    
+    phys = (pte_pfn(*pte) << PAGE_SHIFT) + (v2p->virt_addr & ~PAGE_MASK);
+    pte_unmap(pte);
+    
+    up_read(&mm->mmap_lock);
+    put_pid(pid_struct);
+    
+    v2p->phys_addr = phys;
+    v2p->status = 0;
+    snprintf(v2p->message, sizeof(v2p->message), 
+             "PID %d: virt 0x%lx -> phys 0x%lx", v2p->pid, v2p->virt_addr, phys);
+    
+    return 0;
+
+not_found_unmap:
+    if (pte)
+        pte_unmap(pte);
+not_found:
+    up_read(&mm->mmap_lock);
+    put_pid(pid_struct);
+    v2p->status = -EFAULT;
+    strcpy(v2p->message, "Virtual address not mapped");
+    return -EFAULT;
+}
+
+static int patch_memory(struct mem_patch *patch)
+{
+    void *virt_addr;
+    
+    if (patch->size > 4096) {
+        patch->status = -EINVAL;
+        strcpy(patch->message, "Size too large (max 4KB)");
+        return -EINVAL;
+    }
+    
+    // Check if physical address is valid
+    if (!pfn_valid(patch->phys_addr >> PAGE_SHIFT)) {
+        patch->status = -EINVAL;
+        strcpy(patch->message, "Invalid physical address");
+        return -EINVAL;
+    }
+    
+    // Map physical address to virtual
+    virt_addr = phys_to_virt(patch->phys_addr);
+    if (!virt_addr) {
+        patch->status = -ENOMEM;
+        strcpy(patch->message, "Failed to map physical address");
+        return -ENOMEM;
+    }
+    
+    if (patch->restore) {
+        // Restore original data
+        memcpy(virt_addr, patch->original_data, patch->size);
+        snprintf(patch->message, sizeof(patch->message), 
+                 "Restored %lu bytes at phys 0x%lx", patch->size, patch->phys_addr);
+        printk(KERN_WARNING "KAPI: Restored memory patch at 0x%lx\n", patch->phys_addr);
+    } else {
+        // Save original data first
+        memcpy(patch->original_data, virt_addr, patch->size);
+        
+        // Apply patch
+        memcpy(virt_addr, patch->patch_data, patch->size);
+        snprintf(patch->message, sizeof(patch->message), 
+                 "Patched %lu bytes at phys 0x%lx", patch->size, patch->phys_addr);
+        printk(KERN_WARNING "KAPI: Applied memory patch at 0x%lx\n", patch->phys_addr);
+    }
+    
+    patch->status = 0;
+    return 0;
+}
+
 static int execute_kernel_command(struct kernel_cmd *cmd)
 {
     if (strcmp(cmd->command, "get_kernel_version") == 0) {
@@ -1120,6 +1373,55 @@ static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             printk(KERN_CRIT "KAPI: User requested kernel panic! System going down...\n");
             trigger_kernel_panic();
             break; // هرگز اینجا نمی‌رسه 😅
+            
+        // 🔥 خطرناک: مدیریت حافظه فیزیکی
+        case KAPI_READ_PHYS_MEM: {
+            struct phys_mem_read mem_read;
+            if (copy_from_user(&mem_read, (void *)arg, sizeof(mem_read))) {
+                retval = -EFAULT;
+                break;
+            }
+            read_physical_memory(&mem_read);
+            if (copy_to_user((void *)arg, &mem_read, sizeof(mem_read)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        case KAPI_WRITE_PHYS_MEM: {
+            struct phys_mem_write mem_write;
+            if (copy_from_user(&mem_write, (void *)arg, sizeof(mem_write))) {
+                retval = -EFAULT;
+                break;
+            }
+            write_physical_memory(&mem_write);
+            if (copy_to_user((void *)arg, &mem_write, sizeof(mem_write)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        case KAPI_VIRT_TO_PHYS: {
+            struct virt_to_phys v2p;
+            if (copy_from_user(&v2p, (void *)arg, sizeof(v2p))) {
+                retval = -EFAULT;
+                break;
+            }
+            virtual_to_physical(&v2p);
+            if (copy_to_user((void *)arg, &v2p, sizeof(v2p)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        case KAPI_PATCH_MEMORY: {
+            struct mem_patch patch;
+            if (copy_from_user(&patch, (void *)arg, sizeof(patch))) {
+                retval = -EFAULT;
+                break;
+            }
+            patch_memory(&patch);
+            if (copy_to_user((void *)arg, &patch, sizeof(patch)))
+                retval = -EFAULT;
+            break;
+        }
             
         default:
             retval = -ENOTTY;
