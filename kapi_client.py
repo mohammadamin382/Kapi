@@ -1,1076 +1,1375 @@
-#!/usr/bin/env python3
-"""
-Kernel API Client v2.0 - Advanced Python userland interface for the kernel driver
-This module provides a comprehensive interface to communicate with the enhanced kernel driver
-"""
 
-import os
-import sys
-import struct
-import fcntl
-import mmap
-import socket
-import time
-import json
-from ctypes import *
-from datetime import datetime
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/init.h>
+#include <linux/fs.h>
+#include <linux/device.h>
+#include <linux/cdev.h>
+#include <linux/uaccess.h>
+#include <linux/ioctl.h>
+#include <linux/slab.h>
+#include <linux/mm.h>
+#include <linux/netlink.h>
+#include <linux/skbuff.h>
+#include <net/sock.h>
+#include <linux/proc_fs.h>
+#include <linux/seq_file.h>
+#include <linux/version.h>
+#include <linux/ktime.h>
+#include <linux/utsname.h>
+#include <linux/sched.h>
+#include <linux/pid.h>
+#include <linux/sched/signal.h>
+#include <linux/sched/mm.h>
+#include <linux/cpufreq.h>
+#include <linux/cpumask.h>
+#include <linux/timekeeping.h>
+#include <linux/vmstat.h>
+#include <linux/pagemap.h>
+#include <linux/swap.h>
+#include <linux/security.h>
+#include <linux/capability.h>
+#include <linux/cred.h>
+#include <linux/file.h>
+#include <linux/fdtable.h>
+#include <linux/dcache.h>
+#include <linux/mount.h>
+#include <linux/path.h>
+#include <linux/namei.h>
+#include <linux/mman.h>
+#include <linux/percpu_counter.h>
+#include <linux/signal.h>
+#include <linux/kmod.h>
+#include <linux/netdevice.h>
 
-# Device path
-DEVICE_PATH = "/dev/kernel_api_exporter"
+#define DEVICE_NAME "kernel_api_exporter"
+#define CLASS_NAME "kapi"
+#define NETLINK_USER 31
 
-# IOCTL commands (must match kernel driver)
-KAPI_IOC_MAGIC = ord('k')
+// IOCTL commands
+#define KAPI_IOC_MAGIC 'k'
+#define KAPI_GET_MEMORY_INFO      _IOR(KAPI_IOC_MAGIC, 1, struct memory_info)
+#define KAPI_GET_CPU_INFO         _IOR(KAPI_IOC_MAGIC, 2, struct cpu_info)
+#define KAPI_GET_PROCESS_INFO     _IOWR(KAPI_IOC_MAGIC, 3, struct process_info)
+#define KAPI_EXECUTE_KERNEL_CMD   _IOWR(KAPI_IOC_MAGIC, 4, struct kernel_cmd)
+#define KAPI_GET_NETWORK_STATS    _IOR(KAPI_IOC_MAGIC, 5, struct network_stats)
+#define KAPI_GET_FILE_SYSTEM_INFO _IOR(KAPI_IOC_MAGIC, 6, struct filesystem_info)
+#define KAPI_GET_KERNEL_MODULES   _IOR(KAPI_IOC_MAGIC, 7, struct module_info)
+#define KAPI_GET_INTERRUPTS       _IOR(KAPI_IOC_MAGIC, 8, struct interrupt_info)
+#define KAPI_GET_LOADAVG          _IOR(KAPI_IOC_MAGIC, 9, struct loadavg_info)
+#define KAPI_GET_KERNEL_CONFIG    _IOR(KAPI_IOC_MAGIC, 10, struct kernel_config)
+#define KAPI_GET_PCI_DEVICES      _IOR(KAPI_IOC_MAGIC, 11, struct pci_device_info)
+#define KAPI_GET_BLOCK_DEVICES    _IOR(KAPI_IOC_MAGIC, 12, struct block_device_info)
+#define KAPI_GET_THERMAL_INFO     _IOR(KAPI_IOC_MAGIC, 13, struct thermal_info)
+#define KAPI_READ_KERNEL_LOG      _IOR(KAPI_IOC_MAGIC, 14, struct kernel_log)
+#define KAPI_KILL_PROCESS         _IOW(KAPI_IOC_MAGIC, 15, struct process_control)
+#define KAPI_SUSPEND_PROCESS      _IOW(KAPI_IOC_MAGIC, 16, struct process_control)
+#define KAPI_RESUME_PROCESS       _IOW(KAPI_IOC_MAGIC, 17, struct process_control)
+#define KAPI_LOAD_MODULE          _IOW(KAPI_IOC_MAGIC, 18, struct module_control)
+#define KAPI_UNLOAD_MODULE        _IOW(KAPI_IOC_MAGIC, 19, struct module_control)
+#define KAPI_TOGGLE_INTERFACE     _IOW(KAPI_IOC_MAGIC, 20, struct net_control)
+#define KAPI_MOUNT_FS             _IOW(KAPI_IOC_MAGIC, 21, struct fs_control)
+#define KAPI_UMOUNT_FS            _IOW(KAPI_IOC_MAGIC, 22, struct fs_control)
+#define KAPI_INJECT_LOG           _IOW(KAPI_IOC_MAGIC, 23, struct log_injection)
+#define KAPI_FORCE_PAGE_RECLAIM   _IO(KAPI_IOC_MAGIC, 24)
+#define KAPI_SET_CPU_AFFINITY     _IOW(KAPI_IOC_MAGIC, 25, struct cpu_control)
+#define KAPI_PANIC_KERNEL         _IO(KAPI_IOC_MAGIC, 26)
+#define KAPI_IOC_MAXNR 26
 
-def _IOC(direction, magic, number, size):
-    return (direction << 30) | (magic << 8) | number | (int(size) << 16)
+// Data structures for communication
+struct memory_info {
+    unsigned long total_ram;
+    unsigned long free_ram;
+    unsigned long used_ram;
+    unsigned long buffers;
+    unsigned long cached;
+    unsigned long swap_total;
+    unsigned long swap_free;
+    unsigned long slab;
+    unsigned long page_tables;
+    unsigned long vmalloc_used;
+    unsigned long committed_as;
+    unsigned long dirty;
+    unsigned long writeback;
+    unsigned long anon_pages;
+    unsigned long mapped;
+    unsigned long shmem;
+};
 
-def _IOR(magic, number, struct_type):
-    return _IOC(2, magic, number, int(sizeof(struct_type)))
+struct cpu_info {
+    unsigned int num_cpus;
+    unsigned int num_online_cpus;
+    unsigned long cpu_freq;
+    char cpu_model[64];
+    unsigned long uptime;
+    unsigned long idle_time;
+    unsigned long user_time;
+    unsigned long system_time;
+    unsigned long iowait_time;
+    unsigned long irq_time;
+    unsigned long softirq_time;
+    unsigned long guest_time;
+    unsigned int cache_size;
+    unsigned int cache_alignment;
+    char vendor_id[16];
+    char cpu_family[16];
+};
 
-def _IOWR(magic, number, struct_type):
-    return _IOC(3, magic, number, int(sizeof(struct_type)))
+struct process_info {
+    int pid;
+    char comm[16];
+    unsigned long memory_usage;
+    unsigned int cpu_usage;
+    int num_threads;
+    int ppid;
+    int pgrp;
+    int session;
+    int tty_nr;
+    unsigned long start_time;
+    unsigned long vsize;
+    long rss;
+    unsigned long rsslim;
+    unsigned long priority;
+    long nice;
+    unsigned long num_threads_full;
+    char state;
+    unsigned int flags;
+};
 
-# Netlink constants
-NETLINK_USER = 31
+struct kernel_cmd {
+    char command[256];
+    char result[1024];
+    int status;
+};
 
-# Enhanced data structures (must match kernel structures)
-class MemoryInfo(Structure):
-    _fields_ = [
-        ("total_ram", c_ulong),
-        ("free_ram", c_ulong),
-        ("used_ram", c_ulong),
-        ("buffers", c_ulong),
-        ("cached", c_ulong),
-        ("swap_total", c_ulong),
-        ("swap_free", c_ulong),
-        ("slab", c_ulong),
-        ("page_tables", c_ulong),
-        ("vmalloc_used", c_ulong),
-        ("committed_as", c_ulong),
-        ("dirty", c_ulong),
-        ("writeback", c_ulong),
-        ("anon_pages", c_ulong),
-        ("mapped", c_ulong),
-        ("shmem", c_ulong),
-    ]
+struct network_stats {
+    unsigned long rx_packets;
+    unsigned long tx_packets;
+    unsigned long rx_bytes;
+    unsigned long tx_bytes;
+    unsigned long rx_errors;
+    unsigned long tx_errors;
+    unsigned long rx_dropped;
+    unsigned long tx_dropped;
+    unsigned long multicast;
+    unsigned long collisions;
+    unsigned long rx_length_errors;
+    unsigned long rx_over_errors;
+    unsigned long rx_crc_errors;
+    unsigned long rx_frame_errors;
+    unsigned long rx_fifo_errors;
+    unsigned long rx_missed_errors;
+    unsigned long tx_aborted_errors;
+    unsigned long tx_carrier_errors;
+    unsigned long tx_fifo_errors;
+    unsigned long tx_heartbeat_errors;
+    unsigned long tx_window_errors;
+};
 
-class CPUInfo(Structure):
-    _fields_ = [
-        ("num_cpus", c_uint),
-        ("num_online_cpus", c_uint),
-        ("cpu_freq", c_ulong),
-        ("cpu_model", c_char * 64),
-        ("uptime", c_ulong),
-        ("idle_time", c_ulong),
-        ("user_time", c_ulong),
-        ("system_time", c_ulong),
-        ("iowait_time", c_ulong),
-        ("irq_time", c_ulong),
-        ("softirq_time", c_ulong),
-        ("guest_time", c_ulong),
-        ("cache_size", c_uint),
-        ("cache_alignment", c_uint),
-        ("vendor_id", c_char * 16),
-        ("cpu_family", c_char * 16),
-    ]
+struct filesystem_info {
+    char fs_type[32];
+    unsigned long total_blocks;
+    unsigned long free_blocks;
+    unsigned long available_blocks;
+    unsigned long total_inodes;
+    unsigned long free_inodes;
+    unsigned long block_size;
+    unsigned long max_filename_len;
+    char mount_point[256];
+    char device_name[64];
+    unsigned long flags;
+};
 
-class ProcessInfo(Structure):
-    _fields_ = [
-        ("pid", c_int),
-        ("comm", c_char * 16),
-        ("memory_usage", c_ulong),
-        ("cpu_usage", c_uint),
-        ("num_threads", c_int),
-        ("ppid", c_int),
-        ("pgrp", c_int),
-        ("session", c_int),
-        ("tty_nr", c_int),
-        ("start_time", c_ulong),
-        ("vsize", c_ulong),
-        ("rss", c_long),
-        ("rsslim", c_ulong),
-        ("priority", c_ulong),
-        ("nice", c_long),
-        ("num_threads_full", c_ulong),
-        ("state", c_char),
-        ("flags", c_uint),
-    ]
+struct module_info {
+    char name[64];
+    unsigned long size;
+    int used_by_count;
+    char used_by[256];
+    char state[16];
+    unsigned long load_addr;
+    char version[32];
+};
 
-class KernelCmd(Structure):
-    _fields_ = [
-        ("command", c_char * 256),
-        ("result", c_char * 1024),
-        ("status", c_int),
-    ]
+struct interrupt_info {
+    unsigned int irq;
+    unsigned long count;
+    char type[32];
+    char device[64];
+    unsigned int cpu_count[8]; // Up to 8 CPUs
+};
 
-class NetworkStats(Structure):
-    _fields_ = [
-        ("rx_packets", c_ulong),
-        ("tx_packets", c_ulong),
-        ("rx_bytes", c_ulong),
-        ("tx_bytes", c_ulong),
-        ("rx_errors", c_ulong),
-        ("tx_errors", c_ulong),
-        ("rx_dropped", c_ulong),
-        ("tx_dropped", c_ulong),
-        ("multicast", c_ulong),
-        ("collisions", c_ulong),
-        ("rx_length_errors", c_ulong),
-        ("rx_over_errors", c_ulong),
-        ("rx_crc_errors", c_ulong),
-        ("rx_frame_errors", c_ulong),
-        ("rx_fifo_errors", c_ulong),
-        ("rx_missed_errors", c_ulong),
-        ("tx_aborted_errors", c_ulong),
-        ("tx_carrier_errors", c_ulong),
-        ("tx_fifo_errors", c_ulong),
-        ("tx_heartbeat_errors", c_ulong),
-        ("tx_window_errors", c_ulong),
-    ]
+struct loadavg_info {
+    unsigned long load1;    // 1 minute load average
+    unsigned long load5;    // 5 minute load average  
+    unsigned long load15;   // 15 minute load average
+    unsigned long running_tasks;
+    unsigned long total_tasks;
+    unsigned long last_pid;
+};
 
-class FilesystemInfo(Structure):
-    _fields_ = [
-        ("fs_type", c_char * 32),
-        ("total_blocks", c_ulong),
-        ("free_blocks", c_ulong),
-        ("available_blocks", c_ulong),
-        ("total_inodes", c_ulong),
-        ("free_inodes", c_ulong),
-        ("block_size", c_ulong),
-        ("max_filename_len", c_ulong),
-        ("mount_point", c_char * 256),
-        ("device_name", c_char * 64),
-        ("flags", c_ulong),
-    ]
+struct kernel_config {
+    char version[64];
+    char compile_time[64];
+    char compile_by[64];
+    char compile_host[64];
+    char compiler[64];
+    char build_date[64];
+    unsigned long hz;
+    unsigned long page_size;
+    unsigned long phys_addr_bits;
+    unsigned long virt_addr_bits;
+    char arch[32];
+};
 
-class LoadAvgInfo(Structure):
-    _fields_ = [
-        ("load1", c_ulong),
-        ("load5", c_ulong),
-        ("load15", c_ulong),
-        ("running_tasks", c_ulong),
-        ("total_tasks", c_ulong),
-        ("last_pid", c_ulong),
-    ]
+struct pci_device_info {
+    unsigned int vendor_id;
+    unsigned int device_id;
+    unsigned int subsystem_vendor;
+    unsigned int subsystem_device;
+    char device_name[128];
+    char vendor_name[64];
+    unsigned int class_code;
+    unsigned int revision;
+    unsigned long base_addr[6];
+    unsigned int irq;
+};
 
-class KernelConfig(Structure):
-    _fields_ = [
-        ("version", c_char * 64),
-        ("compile_time", c_char * 64),
-        ("compile_by", c_char * 64),
-        ("compile_host", c_char * 64),
-        ("compiler", c_char * 64),
-        ("build_date", c_char * 64),
-        ("hz", c_ulong),
-        ("page_size", c_ulong),
-        ("phys_addr_bits", c_ulong),
-        ("virt_addr_bits", c_ulong),
-        ("arch", c_char * 32),
-    ]
+struct block_device_info {
+    char name[32];
+    unsigned long size;
+    unsigned long queue_depth;
+    unsigned long read_ios;
+    unsigned long read_sectors;
+    unsigned long write_ios;
+    unsigned long write_sectors;
+    unsigned long discard_ios;
+    unsigned long discard_sectors;
+    char model[64];
+    char serial[32];
+};
 
-# Dangerous control structures
-class ProcessControl(Structure):
-    _fields_ = [
-        ("pid", c_int),
-        ("signal", c_int),
-        ("status", c_int),
-        ("message", c_char * 256),
-    ]
+struct thermal_info {
+    char type[32];
+    int temperature;        // in milli-celsius
+    int critical_temp;
+    int max_temp;
+    char cooling_device[64];
+    int trip_point_count;
+    int trip_temps[10];
+};
 
-class ModuleControl(Structure):
-    _fields_ = [
-        ("path", c_char * 256),
-        ("name", c_char * 64),
-        ("params", c_char * 256),
-        ("status", c_int),
-        ("message", c_char * 256),
-    ]
+struct kernel_log {
+    char level[16];
+    char message[512];
+    unsigned long timestamp;
+    char facility[32];
+};
 
-class NetControl(Structure):
-    _fields_ = [
-        ("interface", c_char * 16),
-        ("up", c_int),
-        ("status", c_int),
-        ("message", c_char * 256),
-    ]
+struct process_control {
+    int pid;
+    int signal;
+    int status;
+    char message[256];
+};
 
-class FSControl(Structure):
-    _fields_ = [
-        ("device", c_char * 128),
-        ("path", c_char * 256),
-        ("type", c_char * 32),
-        ("options", c_char * 256),
-        ("status", c_int),
-        ("message", c_char * 256),
-    ]
+struct module_control {
+    char path[256];
+    char name[64];
+    char params[256];
+    int status;
+    char message[256];
+};
 
-class LogInjection(Structure):
-    _fields_ = [
-        ("level", c_char * 16),
-        ("message", c_char * 512),
-        ("status", c_int),
-    ]
+struct net_control {
+    char interface[16];
+    int up;
+    int status;
+    char message[256];
+};
 
-class CPUControl(Structure):
-    _fields_ = [
-        ("pid", c_int),
-        ("mask", c_ulong),
-        ("status", c_int),
-        ("message", c_char * 256),
-    ]
+struct fs_control {
+    char device[128];
+    char path[256];
+    char type[32];
+    char options[256];
+    int status;
+    char message[256];
+};
 
-def _IOW(magic, number, struct_type):
-    return _IOC(1, magic, number, int(sizeof(struct_type)))
+struct log_injection {
+    char level[16];
+    char message[512];
+    int status;
+};
 
-def _IO(magic, number):
-    return _IOC(0, magic, number, 0)
+struct cpu_control {
+    int pid;
+    unsigned long mask;
+    int status;
+    char message[256];
+};
 
-# IOCTL command definitions
-KAPI_GET_MEMORY_INFO = _IOR(KAPI_IOC_MAGIC, 1, MemoryInfo)
-KAPI_GET_CPU_INFO = _IOR(KAPI_IOC_MAGIC, 2, CPUInfo)
-KAPI_GET_PROCESS_INFO = _IOWR(KAPI_IOC_MAGIC, 3, ProcessInfo)
-KAPI_EXECUTE_KERNEL_CMD = _IOWR(KAPI_IOC_MAGIC, 4, KernelCmd)
-KAPI_GET_NETWORK_STATS = _IOR(KAPI_IOC_MAGIC, 5, NetworkStats)
-KAPI_GET_FILE_SYSTEM_INFO = _IOR(KAPI_IOC_MAGIC, 6, FilesystemInfo)
-KAPI_GET_LOADAVG = _IOR(KAPI_IOC_MAGIC, 9, LoadAvgInfo)
-KAPI_GET_KERNEL_CONFIG = _IOR(KAPI_IOC_MAGIC, 10, KernelConfig)
+// Global variables
+static int major_number;
+static struct class* kapi_class = NULL;
+static struct device* kapi_device = NULL;
+static struct sock *netlink_sock = NULL;
+static void *shared_buffer;
+static size_t buffer_size = PAGE_SIZE * 4; // 16KB shared buffer
+static unsigned long shared_buffer_phys;
 
-# Dangerous control commands
-KAPI_KILL_PROCESS = _IOW(KAPI_IOC_MAGIC, 15, ProcessControl)
-KAPI_SUSPEND_PROCESS = _IOW(KAPI_IOC_MAGIC, 16, ProcessControl)
-KAPI_RESUME_PROCESS = _IOW(KAPI_IOC_MAGIC, 17, ProcessControl)
-KAPI_LOAD_MODULE = _IOW(KAPI_IOC_MAGIC, 18, ModuleControl)
-KAPI_UNLOAD_MODULE = _IOW(KAPI_IOC_MAGIC, 19, ModuleControl)
-KAPI_TOGGLE_INTERFACE = _IOW(KAPI_IOC_MAGIC, 20, NetControl)
-KAPI_MOUNT_FS = _IOW(KAPI_IOC_MAGIC, 21, FSControl)
-KAPI_UMOUNT_FS = _IOW(KAPI_IOC_MAGIC, 22, FSControl)
-KAPI_INJECT_LOG = _IOW(KAPI_IOC_MAGIC, 23, LogInjection)
-KAPI_FORCE_PAGE_RECLAIM = _IO(KAPI_IOC_MAGIC, 24)
-KAPI_SET_CPU_AFFINITY = _IOW(KAPI_IOC_MAGIC, 25, CPUControl)
-KAPI_PANIC_KERNEL = _IO(KAPI_IOC_MAGIC, 26)
+// Function prototypes
+static int device_open(struct inode *, struct file *);
+static int device_release(struct inode *, struct file *);
+static ssize_t device_read(struct file *, char *, size_t, loff_t *);
+static ssize_t device_write(struct file *, const char *, size_t, loff_t *);
+static long device_ioctl(struct file *, unsigned int, unsigned long);
+static int device_mmap(struct file *, struct vm_area_struct *);
+static void netlink_recv_msg(struct sk_buff *skb);
 
-class KernelAPIClient:
-    """Enhanced client class for communicating with the kernel driver"""
+// File operations structure
+static struct file_operations fops = {
+    .open = device_open,
+    .read = device_read,
+    .write = device_write,
+    .release = device_release,
+    .unlocked_ioctl = device_ioctl,
+    .mmap = device_mmap,
+};
 
-    def __init__(self):
-        self.device_fd = None
-        self.netlink_socket = None
-        self.shared_memory = None
-        self.connected = False
+// Memory management functions
+static void get_memory_info(struct memory_info *mem_info)
+{
+    struct sysinfo si;
+    si_meminfo(&si);
+    
+    mem_info->total_ram = si.totalram << PAGE_SHIFT;
+    mem_info->free_ram = si.freeram << PAGE_SHIFT;
+    mem_info->used_ram = (si.totalram - si.freeram) << PAGE_SHIFT;
+    mem_info->buffers = si.bufferram << PAGE_SHIFT;
+    mem_info->cached = global_node_page_state(NR_FILE_PAGES) << PAGE_SHIFT;
+    mem_info->swap_total = si.totalswap << PAGE_SHIFT;
+    mem_info->swap_free = si.freeswap << PAGE_SHIFT;
+    mem_info->slab = global_node_page_state(NR_SLAB_RECLAIMABLE_B) + 
+                     global_node_page_state(NR_SLAB_UNRECLAIMABLE_B);
+    mem_info->page_tables = global_node_page_state(NR_PAGETABLE);
+    mem_info->vmalloc_used = 0; // Simplified
+    mem_info->committed_as = 0; // Use sysinfo instead of internal symbol
+    mem_info->dirty = global_node_page_state(NR_FILE_DIRTY) << PAGE_SHIFT;
+    mem_info->writeback = global_node_page_state(NR_WRITEBACK) << PAGE_SHIFT;
+    mem_info->anon_pages = global_node_page_state(NR_ANON_MAPPED) << PAGE_SHIFT;
+    mem_info->mapped = global_node_page_state(NR_FILE_MAPPED) << PAGE_SHIFT;
+    mem_info->shmem = global_node_page_state(NR_SHMEM) << PAGE_SHIFT;
+}
 
-    def connect(self):
-        """Connect to the kernel driver"""
-        try:
-            # Check if device exists
-            if not os.path.exists(DEVICE_PATH):
-                print(f"Device {DEVICE_PATH} not found. Make sure the kernel module is loaded.")
-                return False
+static void get_cpu_info(struct cpu_info *cpu_info)
+{
+    cpu_info->num_cpus = num_possible_cpus();
+    cpu_info->num_online_cpus = num_online_cpus();
+    cpu_info->cpu_freq = 0; // Would need cpufreq subsystem
+    strcpy(cpu_info->cpu_model, "Generic x86_64");
+    cpu_info->uptime = ktime_get_boottime_seconds();
+    cpu_info->idle_time = 0; // Simplified
+    cpu_info->user_time = 0;
+    cpu_info->system_time = 0;
+    cpu_info->iowait_time = 0;
+    cpu_info->irq_time = 0;
+    cpu_info->softirq_time = 0;
+    cpu_info->guest_time = 0;
+    cpu_info->cache_size = 0;
+    cpu_info->cache_alignment = L1_CACHE_BYTES;
+    strcpy(cpu_info->vendor_id, "GenuineIntel");
+    strcpy(cpu_info->cpu_family, "6");
+}
 
-            # Open character device
-            self.device_fd = os.open(DEVICE_PATH, os.O_RDWR)
-            print(f"✓ Connected to kernel driver at {DEVICE_PATH}")
+static void get_process_info(struct process_info *proc_info, int target_pid)
+{
+    struct task_struct *task;
+    struct pid *pid_struct;
+    
+    pid_struct = find_get_pid(target_pid);
+    if (!pid_struct) {
+        proc_info->pid = -1;
+        return;
+    }
+    
+    task = pid_task(pid_struct, PIDTYPE_PID);
+    if (!task) {
+        put_pid(pid_struct);
+        proc_info->pid = -1;
+        return;
+    }
+    
+    proc_info->pid = task->pid;
+    strncpy(proc_info->comm, task->comm, sizeof(proc_info->comm) - 1);
+    proc_info->comm[sizeof(proc_info->comm) - 1] = '\0';
+    
+    if (task->mm) {
+        proc_info->memory_usage = get_mm_rss(task->mm) << PAGE_SHIFT;
+        proc_info->vsize = task->mm->total_vm << PAGE_SHIFT;
+        proc_info->rss = get_mm_rss(task->mm);
+        proc_info->rsslim = task->signal->rlim[RLIMIT_RSS].rlim_cur;
+    } else {
+        proc_info->memory_usage = 0;
+        proc_info->vsize = 0;
+        proc_info->rss = 0;
+        proc_info->rsslim = 0;
+    }
+    
+    proc_info->cpu_usage = 0; // Simplified
+    proc_info->num_threads = get_nr_threads(task);
+    proc_info->ppid = task->real_parent->pid;
+    proc_info->pgrp = task_pgrp_nr(task);
+    proc_info->session = task_session_vnr(task);
+    proc_info->tty_nr = 0; // Simplified
+    proc_info->start_time = task->start_time;
+    proc_info->priority = task->prio;
+    proc_info->nice = task_nice(task);
+    proc_info->num_threads_full = get_nr_threads(task);
+    proc_info->state = (char)task_state_to_char(task);
+    proc_info->flags = task->flags;
+    
+    put_pid(pid_struct);
+}
 
-            # Create netlink socket
-            try:
-                self.netlink_socket = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, NETLINK_USER)
-                self.netlink_socket.bind((os.getpid(), 0))
-                print("✓ Netlink socket created")
-            except Exception as e:
-                print(f"⚠ Netlink socket creation failed: {e}")
-                self.netlink_socket = None
+static void get_network_stats(struct network_stats *net_stats)
+{
+    // Simplified network statistics - in real implementation would iterate through network devices
+    memset(net_stats, 0, sizeof(*net_stats));
+    net_stats->rx_packets = 1000;
+    net_stats->tx_packets = 800;
+    net_stats->rx_bytes = 1024000;
+    net_stats->tx_bytes = 512000;
+    net_stats->rx_errors = 0;
+    net_stats->tx_errors = 0;
+}
 
-            # Memory map the device (16KB buffer)
-            try:
-                # Try to memory map with proper flags
-                self.shared_memory = mmap.mmap(
-                    self.device_fd, 
-                    16384,  # 4 pages * 4KB = 16KB
-                    mmap.MAP_SHARED, 
-                    mmap.PROT_READ | mmap.PROT_WRITE, 
-                    offset=0
-                )
-                print("✓ Memory mapped device buffer (16KB)")
-            except OSError as e:
-                print(f"⚠ Memory mapping failed with OSError: {e}")
-                print(f"  Error code: {e.errno}")
-                self.shared_memory = None
-            except Exception as e:
-                print(f"⚠ Memory mapping failed: {e}")
-                self.shared_memory = None
+static void get_filesystem_info(struct filesystem_info *fs_info)
+{
+    // Simplified filesystem info
+    strcpy(fs_info->fs_type, "ext4");
+    fs_info->total_blocks = 1000000;
+    fs_info->free_blocks = 500000;
+    fs_info->available_blocks = 450000;
+    fs_info->total_inodes = 100000;
+    fs_info->free_inodes = 50000;
+    fs_info->block_size = 4096;
+    fs_info->max_filename_len = 255;
+    strcpy(fs_info->mount_point, "/");
+    strcpy(fs_info->device_name, "/dev/sda1");
+    fs_info->flags = 0;
+}
 
-            self.connected = True
-            return True
+static void get_loadavg_info(struct loadavg_info *load_info)
+{
+    struct task_struct *g, *p;
+    unsigned long running_count = 0;
+    unsigned long total_count = 0;
+    
+    // Simplified load average calculation (would need access to avenrun array in real implementation)
+    load_info->load1 = 100;    // Simplified - in real implementation would read from avenrun
+    load_info->load5 = 95;     // Simplified
+    load_info->load15 = 90;    // Simplified
+    
+    // Count running and total tasks
+    rcu_read_lock();
+    for_each_process_thread(g, p) {
+        total_count++;
+        if (p->__state == TASK_RUNNING)
+            running_count++;
+    }
+    rcu_read_unlock();
+    
+    load_info->running_tasks = running_count;
+    load_info->total_tasks = total_count;
+    load_info->last_pid = 0; // Simplified
+}
 
-        except Exception as e:
-            print(f"✗ Failed to connect to kernel driver: {e}")
-            self.disconnect()
-            return False
+static void get_kernel_config(struct kernel_config *config)
+{
+    strncpy(config->version, init_uts_ns.name.release, sizeof(config->version) - 1);
+    config->version[sizeof(config->version) - 1] = '\0';
+    
+    strcpy(config->compile_time, "kernel-build");
+    strcpy(config->compile_by, "kapi-driver");
+    strcpy(config->compile_host, "replit");
+    strcpy(config->compiler, __VERSION__);
+    strcpy(config->build_date, "dynamic-build");
+    
+    config->hz = HZ;
+    config->page_size = PAGE_SIZE;
+    config->phys_addr_bits = 64; // Simplified
+    config->virt_addr_bits = 48; // Simplified
+    
+    strncpy(config->arch, init_uts_ns.name.machine, sizeof(config->arch) - 1);
+    config->arch[sizeof(config->arch) - 1] = '\0';
+}
 
-    def disconnect(self):
-        """Disconnect from the kernel driver"""
-        if self.shared_memory:
-            self.shared_memory.close()
-            self.shared_memory = None
+// خطرناک: کنترل پروسه‌ها
+static int kill_process_by_pid(struct process_control *ctrl)
+{
+    struct task_struct *task;
+    struct pid *pid_struct;
+    int ret = 0;
+    
+    pid_struct = find_get_pid(ctrl->pid);
+    if (!pid_struct) {
+        ctrl->status = -ESRCH;
+        strcpy(ctrl->message, "Process not found");
+        return -ESRCH;
+    }
+    
+    task = pid_task(pid_struct, PIDTYPE_PID);
+    if (!task) {
+        put_pid(pid_struct);
+        ctrl->status = -ESRCH;
+        strcpy(ctrl->message, "Task not found");
+        return -ESRCH;
+    }
+    
+    ret = send_sig(ctrl->signal, task, 0);
+    ctrl->status = ret;
+    if (ret == 0) {
+        snprintf(ctrl->message, sizeof(ctrl->message), 
+                "Signal %d sent to PID %d", ctrl->signal, ctrl->pid);
+    } else {
+        snprintf(ctrl->message, sizeof(ctrl->message), 
+                "Failed to send signal: %d", ret);
+    }
+    
+    put_pid(pid_struct);
+    return ret;
+}
 
-        if self.netlink_socket:
-            self.netlink_socket.close()
-            self.netlink_socket = None
+static int suspend_resume_process(struct process_control *ctrl, bool suspend)
+{
+    struct task_struct *task;
+    struct pid *pid_struct;
+    int ret = 0;
+    
+    pid_struct = find_get_pid(ctrl->pid);
+    if (!pid_struct) {
+        ctrl->status = -ESRCH;
+        strcpy(ctrl->message, "Process not found");
+        return -ESRCH;
+    }
+    
+    task = pid_task(pid_struct, PIDTYPE_PID);
+    if (!task) {
+        put_pid(pid_struct);
+        ctrl->status = -ESRCH;
+        strcpy(ctrl->message, "Task not found");
+        return -ESRCH;
+    }
+    
+    if (suspend) {
+        ret = send_sig(SIGSTOP, task, 0);
+        strcpy(ctrl->message, suspend ? "Process suspended" : "Process resumed");
+    } else {
+        ret = send_sig(SIGCONT, task, 0);
+        strcpy(ctrl->message, "Process resumed");
+    }
+    
+    ctrl->status = ret;
+    put_pid(pid_struct);
+    return ret;
+}
 
-        if self.device_fd:
-            os.close(self.device_fd)
-            self.device_fd = None
+// خطرناک: مدیریت ماژول‌ها
+static int load_kernel_module(struct module_control *mod_ctrl)
+{
+    char *argv[] = { "/sbin/insmod", mod_ctrl->path, mod_ctrl->params, NULL };
+    char *envp[] = { "HOME=/", "PATH=/sbin:/bin:/usr/bin", NULL };
+    int ret;
+    
+    ret = call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
+    mod_ctrl->status = ret;
+    
+    if (ret == 0) {
+        snprintf(mod_ctrl->message, sizeof(mod_ctrl->message), 
+                "Module %s loaded successfully", mod_ctrl->path);
+    } else {
+        snprintf(mod_ctrl->message, sizeof(mod_ctrl->message), 
+                "Failed to load module %s: %d", mod_ctrl->path, ret);
+    }
+    
+    return ret;
+}
 
-        self.connected = False
-        print("✓ Disconnected from kernel driver")
+static int unload_kernel_module(struct module_control *mod_ctrl)
+{
+    char *argv[] = { "/sbin/rmmod", mod_ctrl->name, NULL };
+    char *envp[] = { "HOME=/", "PATH=/sbin:/bin:/usr/bin", NULL };
+    int ret;
+    
+    ret = call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
+    mod_ctrl->status = ret;
+    
+    if (ret == 0) {
+        snprintf(mod_ctrl->message, sizeof(mod_ctrl->message), 
+                "Module %s unloaded successfully", mod_ctrl->name);
+    } else {
+        snprintf(mod_ctrl->message, sizeof(mod_ctrl->message), 
+                "Failed to unload module %s: %d", mod_ctrl->name, ret);
+    }
+    
+    return ret;
+}
 
-    def is_connected(self):
-        """Check if connected to the kernel driver"""
-        return self.connected and self.device_fd is not None
+// خطرناک: کنترل شبکه
+static int toggle_network_interface(struct net_control *net_ctrl)
+{
+    struct net_device *dev;
+    int ret = 0;
+    
+    dev = dev_get_by_name(&init_net, net_ctrl->interface);
+    if (!dev) {
+        net_ctrl->status = -ENODEV;
+        strcpy(net_ctrl->message, "Network interface not found");
+        return -ENODEV;
+    }
+    
+    if (net_ctrl->up) {
+        ret = dev_open(dev, NULL);
+        strcpy(net_ctrl->message, "Interface brought up");
+    } else {
+        dev_close(dev);
+        ret = 0;
+        strcpy(net_ctrl->message, "Interface brought down");
+    }
+    
+    net_ctrl->status = ret;
+    dev_put(dev);
+    return ret;
+}
 
-    def get_memory_info(self):
-        """Get comprehensive system memory information"""
-        if not self.is_connected():
-            raise RuntimeError("Not connected to kernel driver")
+// خطرناک: فایل‌سیستم
+static int mount_filesystem(struct fs_control *fs_ctrl)
+{
+    char *argv[] = { "/bin/mount", "-t", fs_ctrl->type, fs_ctrl->device, fs_ctrl->path, NULL };
+    char *envp[] = { "HOME=/", "PATH=/sbin:/bin:/usr/bin", NULL };
+    int ret;
+    
+    ret = call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
+    fs_ctrl->status = ret;
+    
+    if (ret == 0) {
+        snprintf(fs_ctrl->message, sizeof(fs_ctrl->message), 
+                "Mounted %s on %s", fs_ctrl->device, fs_ctrl->path);
+    } else {
+        snprintf(fs_ctrl->message, sizeof(fs_ctrl->message), 
+                "Failed to mount %s: %d", fs_ctrl->device, ret);
+    }
+    
+    return ret;
+}
 
-        mem_info = MemoryInfo()
-        try:
-            fcntl.ioctl(self.device_fd, KAPI_GET_MEMORY_INFO, mem_info)
-            return {
-                'total_ram': mem_info.total_ram,
-                'free_ram': mem_info.free_ram,
-                'used_ram': mem_info.used_ram,
-                'buffers': mem_info.buffers,
-                'cached': mem_info.cached,
-                'swap_total': mem_info.swap_total,
-                'swap_free': mem_info.swap_free,
-                'slab': mem_info.slab,
-                'page_tables': mem_info.page_tables,
-                'vmalloc_used': mem_info.vmalloc_used,
-                'committed_as': mem_info.committed_as,
-                'dirty': mem_info.dirty,
-                'writeback': mem_info.writeback,
-                'anon_pages': mem_info.anon_pages,
-                'mapped': mem_info.mapped,
-                'shmem': mem_info.shmem,
+static int unmount_filesystem(struct fs_control *fs_ctrl)
+{
+    char *argv[] = { "/bin/umount", fs_ctrl->path, NULL };
+    char *envp[] = { "HOME=/", "PATH=/sbin:/bin:/usr/bin", NULL };
+    int ret;
+    
+    ret = call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
+    fs_ctrl->status = ret;
+    
+    if (ret == 0) {
+        snprintf(fs_ctrl->message, sizeof(fs_ctrl->message), 
+                "Unmounted %s", fs_ctrl->path);
+    } else {
+        snprintf(fs_ctrl->message, sizeof(fs_ctrl->message), 
+                "Failed to unmount %s: %d", fs_ctrl->path, ret);
+    }
+    
+    return ret;
+}
+
+// خطرناک: تزریق لاگ
+static int inject_kernel_log(struct log_injection *log_inj)
+{
+    const char *level = KERN_INFO;
+    
+    if (strcmp(log_inj->level, "EMERG") == 0) level = KERN_EMERG;
+    else if (strcmp(log_inj->level, "ALERT") == 0) level = KERN_ALERT;
+    else if (strcmp(log_inj->level, "CRIT") == 0) level = KERN_CRIT;
+    else if (strcmp(log_inj->level, "ERR") == 0) level = KERN_ERR;
+    else if (strcmp(log_inj->level, "WARNING") == 0) level = KERN_WARNING;
+    else if (strcmp(log_inj->level, "NOTICE") == 0) level = KERN_NOTICE;
+    else if (strcmp(log_inj->level, "DEBUG") == 0) level = KERN_DEBUG;
+    
+    printk("%sKAPI_INJECT: %s\n", level, log_inj->message);
+    log_inj->status = 0;
+    
+    return 0;
+}
+
+// خطرناک: فورس page reclaim
+static int force_memory_reclaim(void)
+{
+    // این تابع خیلی خطرناکه - ممکنه سیستم hang کنه
+    // استفاده از iterate_supers برای force flush
+    // در صورت امکان صفحات cache رو پاک می‌کنه
+    printk(KERN_WARNING "KAPI: Force memory reclaim triggered - system may become unresponsive!\n");
+    
+    // ساده‌شده: فقط یه اخطار می‌ده
+    // تابع واقعی خیلی خطرناک هست
+    return 0;
+}
+
+// خطرناک: CPU affinity
+static int set_process_cpu_affinity(struct cpu_control *cpu_ctrl)
+{
+    struct task_struct *task;
+    struct pid *pid_struct;
+    cpumask_t new_mask;
+    int ret = 0;
+    
+    pid_struct = find_get_pid(cpu_ctrl->pid);
+    if (!pid_struct) {
+        cpu_ctrl->status = -ESRCH;
+        strcpy(cpu_ctrl->message, "Process not found");
+        return -ESRCH;
+    }
+    
+    task = pid_task(pid_struct, PIDTYPE_PID);
+    if (!task) {
+        put_pid(pid_struct);
+        cpu_ctrl->status = -ESRCH;
+        strcpy(cpu_ctrl->message, "Task not found");
+        return -ESRCH;
+    }
+    
+    cpumask_clear(&new_mask);
+    cpumask_copy(&new_mask, (cpumask_t *)&cpu_ctrl->mask);
+    
+    ret = set_cpus_allowed_ptr(task, &new_mask);
+    cpu_ctrl->status = ret;
+    
+    if (ret == 0) {
+        snprintf(cpu_ctrl->message, sizeof(cpu_ctrl->message), 
+                "CPU affinity set for PID %d", cpu_ctrl->pid);
+    } else {
+        snprintf(cpu_ctrl->message, sizeof(cpu_ctrl->message), 
+                "Failed to set CPU affinity: %d", ret);
+    }
+    
+    put_pid(pid_struct);
+    return ret;
+}
+
+// خطرناک ترین: Kernel Panic! 💀
+static void trigger_kernel_panic(void)
+{
+    panic("KAPI: Deliberate kernel panic triggered by user! 💀");
+}
+
+static int execute_kernel_command(struct kernel_cmd *cmd)
+{
+    if (strcmp(cmd->command, "get_kernel_version") == 0) {
+        snprintf(cmd->result, sizeof(cmd->result), "Linux %s", init_uts_ns.name.release);
+        cmd->status = 0;
+    } else if (strcmp(cmd->command, "get_uptime") == 0) {
+        snprintf(cmd->result, sizeof(cmd->result), "%lld", ktime_get_boottime_seconds());
+        cmd->status = 0;
+    } else if (strcmp(cmd->command, "get_hostname") == 0) {
+        snprintf(cmd->result, sizeof(cmd->result), "%s", init_uts_ns.name.nodename);
+        cmd->status = 0;
+    } else if (strcmp(cmd->command, "get_domainname") == 0) {
+        snprintf(cmd->result, sizeof(cmd->result), "%s", init_uts_ns.name.domainname);
+        cmd->status = 0;
+    } else if (strcmp(cmd->command, "get_total_memory") == 0) {
+        struct sysinfo si;
+        si_meminfo(&si);
+        snprintf(cmd->result, sizeof(cmd->result), "%lu", si.totalram << PAGE_SHIFT);
+        cmd->status = 0;
+    } else if (strcmp(cmd->command, "get_free_memory") == 0) {
+        struct sysinfo si;
+        si_meminfo(&si);
+        snprintf(cmd->result, sizeof(cmd->result), "%lu", si.freeram << PAGE_SHIFT);
+        cmd->status = 0;
+    } else if (strcmp(cmd->command, "get_cpu_count") == 0) {
+        snprintf(cmd->result, sizeof(cmd->result), "%d", num_online_cpus());
+        cmd->status = 0;
+    } else if (strcmp(cmd->command, "get_page_size") == 0) {
+        snprintf(cmd->result, sizeof(cmd->result), "%lu", PAGE_SIZE);
+        cmd->status = 0;
+    } else if (strcmp(cmd->command, "get_hz") == 0) {
+        snprintf(cmd->result, sizeof(cmd->result), "%d", HZ);
+        cmd->status = 0;
+    } else if (strcmp(cmd->command, "get_jiffies") == 0) {
+        snprintf(cmd->result, sizeof(cmd->result), "%lu", jiffies);
+        cmd->status = 0;
+    } else {
+        strcpy(cmd->result, "Unknown command");
+        cmd->status = -EINVAL;
+    }
+    
+    return cmd->status;
+}
+
+// Device operations
+static int device_open(struct inode *inodep, struct file *filep)
+{
+    printk(KERN_INFO "KAPI: Device opened by PID %d\n", current->pid);
+    return 0;
+}
+
+static ssize_t device_read(struct file *filep, char *buffer, size_t len, loff_t *offset)
+{
+    int error_count = 0;
+    
+    if (*offset >= buffer_size)
+        return 0;
+    
+    if (*offset + len > buffer_size)
+        len = buffer_size - *offset;
+    
+    error_count = copy_to_user(buffer, shared_buffer + *offset, len);
+    
+    if (error_count == 0) {
+        *offset += len;
+        printk(KERN_INFO "KAPI: Sent %zu bytes to user\n", len);
+        return len;
+    } else {
+        printk(KERN_ERR "KAPI: Failed to send %d bytes to user\n", error_count);
+        return -EFAULT;
+    }
+}
+
+static ssize_t device_write(struct file *filep, const char *buffer, size_t len, loff_t *offset)
+{
+    int error_count = 0;
+    
+    if (*offset >= buffer_size)
+        return -ENOSPC;
+    
+    if (*offset + len > buffer_size)
+        len = buffer_size - *offset;
+    
+    error_count = copy_from_user(shared_buffer + *offset, buffer, len);
+    
+    if (error_count == 0) {
+        *offset += len;
+        printk(KERN_INFO "KAPI: Received %zu bytes from user\n", len);
+        return len;
+    } else {
+        printk(KERN_ERR "KAPI: Failed to receive %d bytes from user\n", error_count);
+        return -EFAULT;
+    }
+}
+
+static long device_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    int retval = 0;
+    void *buffer = NULL;
+    size_t buf_size;
+    
+    if (_IOC_TYPE(cmd) != KAPI_IOC_MAGIC) return -ENOTTY;
+    if (_IOC_NR(cmd) > KAPI_IOC_MAXNR) return -ENOTTY;
+    
+    printk(KERN_INFO "KAPI: IOCTL command %u received\n", cmd);
+    
+    switch (cmd) {
+        case KAPI_GET_MEMORY_INFO:
+            buf_size = sizeof(struct memory_info);
+            buffer = kmalloc(buf_size, GFP_KERNEL);
+            if (!buffer) {
+                retval = -ENOMEM;
+                break;
             }
-        except OSError as e:
-            raise RuntimeError(f"Failed to get memory info: {e}")
-
-    def get_cpu_info(self):
-        """Get comprehensive CPU information"""
-        if not self.is_connected():
-            raise RuntimeError("Not connected to kernel driver")
-
-        cpu_info = CPUInfo()
-        try:
-            fcntl.ioctl(self.device_fd, KAPI_GET_CPU_INFO, cpu_info)
-            return {
-                'num_cpus': cpu_info.num_cpus,
-                'num_online_cpus': cpu_info.num_online_cpus,
-                'cpu_freq': cpu_info.cpu_freq,
-                'cpu_model': cpu_info.cpu_model.decode('utf-8').strip('\x00'),
-                'uptime': cpu_info.uptime,
-                'idle_time': cpu_info.idle_time,
-                'user_time': cpu_info.user_time,
-                'system_time': cpu_info.system_time,
-                'iowait_time': cpu_info.iowait_time,
-                'irq_time': cpu_info.irq_time,
-                'softirq_time': cpu_info.softirq_time,
-                'guest_time': cpu_info.guest_time,
-                'cache_size': cpu_info.cache_size,
-                'cache_alignment': cpu_info.cache_alignment,
-                'vendor_id': cpu_info.vendor_id.decode('utf-8').strip('\x00'),
-                'cpu_family': cpu_info.cpu_family.decode('utf-8').strip('\x00'),
+            get_memory_info((struct memory_info *)buffer);
+            if (copy_to_user((void *)arg, buffer, buf_size))
+                retval = -EFAULT;
+            kfree(buffer);
+            break;
+            
+        case KAPI_GET_CPU_INFO:
+            buf_size = sizeof(struct cpu_info);
+            buffer = kmalloc(buf_size, GFP_KERNEL);
+            if (!buffer) {
+                retval = -ENOMEM;
+                break;
             }
-        except OSError as e:
-            raise RuntimeError(f"Failed to get CPU info: {e}")
-
-    def get_process_info(self, pid):
-        """Get comprehensive information about a specific process"""
-        if not self.is_connected():
-            raise RuntimeError("Not connected to kernel driver")
-
-        proc_info = ProcessInfo()
-        proc_info.pid = pid
-
-        try:
-            fcntl.ioctl(self.device_fd, KAPI_GET_PROCESS_INFO, proc_info)
-            if proc_info.pid == -1:
-                return None
-
-            # Safe state handling
-            try:
-                if hasattr(proc_info.state, 'value'):
-                    state_val = proc_info.state.value
-                else:
-                    state_val = proc_info.state
-
-                if isinstance(state_val, bytes):
-                    state_char = state_val.decode('utf-8')[0] if len(state_val) > 0 else 'U'
-                elif isinstance(state_val, int) and state_val > 0:
-                    state_char = chr(state_val)
-                else:
-                    state_char = 'U'
-            except:
-                state_char = 'U'
-
-            return {
-                'pid': proc_info.pid,
-                'comm': proc_info.comm.decode('utf-8').strip('\x00'),
-                'memory_usage': proc_info.memory_usage,
-                'cpu_usage': proc_info.cpu_usage,
-                'num_threads': proc_info.num_threads,
-                'ppid': proc_info.ppid,
-                'pgrp': proc_info.pgrp,
-                'session': proc_info.session,
-                'tty_nr': proc_info.tty_nr,
-                'start_time': proc_info.start_time,
-                'vsize': proc_info.vsize,
-                'rss': proc_info.rss,
-                'rsslim': proc_info.rsslim,
-                'priority': proc_info.priority,
-                'nice': proc_info.nice,
-                'num_threads_full': proc_info.num_threads_full,
-                'state': state_char,
-                'flags': proc_info.flags,
+            get_cpu_info((struct cpu_info *)buffer);
+            if (copy_to_user((void *)arg, buffer, buf_size))
+                retval = -EFAULT;
+            kfree(buffer);
+            break;
+            
+        case KAPI_GET_PROCESS_INFO:
+            buf_size = sizeof(struct process_info);
+            buffer = kmalloc(buf_size, GFP_KERNEL);
+            if (!buffer) {
+                retval = -ENOMEM;
+                break;
             }
-        except OSError as e:
-            raise RuntimeError(f"Failed to get process info: {e}")
-
-    def execute_kernel_command(self, command):
-        """Execute a command in kernel space"""
-        if not self.is_connected():
-            raise RuntimeError("Not connected to kernel driver")
-
-        kernel_cmd = KernelCmd()
-        kernel_cmd.command = command.encode('utf-8')
-
-        try:
-            fcntl.ioctl(self.device_fd, KAPI_EXECUTE_KERNEL_CMD, kernel_cmd)
-            return {
-                'command': kernel_cmd.command.decode('utf-8').strip('\x00'),
-                'result': kernel_cmd.result.decode('utf-8').strip('\x00'),
-                'status': kernel_cmd.status,
+            if (copy_from_user(buffer, (void *)arg, buf_size)) {
+                retval = -EFAULT;
+                kfree(buffer);
+                break;
             }
-        except OSError as e:
-            raise RuntimeError(f"Failed to execute kernel command: {e}")
-
-    def get_network_stats(self):
-        """Get comprehensive network statistics"""
-        if not self.is_connected():
-            raise RuntimeError("Not connected to kernel driver")
-
-        net_stats = NetworkStats()
-        try:
-            fcntl.ioctl(self.device_fd, KAPI_GET_NETWORK_STATS, net_stats)
-            return {
-                'rx_packets': net_stats.rx_packets,
-                'tx_packets': net_stats.tx_packets,
-                'rx_bytes': net_stats.rx_bytes,
-                'tx_bytes': net_stats.tx_bytes,
-                'rx_errors': net_stats.rx_errors,
-                'tx_errors': net_stats.tx_errors,
-                'rx_dropped': net_stats.rx_dropped,
-                'tx_dropped': net_stats.tx_dropped,
-                'multicast': net_stats.multicast,
-                'collisions': net_stats.collisions,
-                'rx_length_errors': net_stats.rx_length_errors,
-                'rx_over_errors': net_stats.rx_over_errors,
-                'rx_crc_errors': net_stats.rx_crc_errors,
-                'rx_frame_errors': net_stats.rx_frame_errors,
-                'rx_fifo_errors': net_stats.rx_fifo_errors,
-                'rx_missed_errors': net_stats.rx_missed_errors,
-                'tx_aborted_errors': net_stats.tx_aborted_errors,
-                'tx_carrier_errors': net_stats.tx_carrier_errors,
-                'tx_fifo_errors': net_stats.tx_fifo_errors,
-                'tx_heartbeat_errors': net_stats.tx_heartbeat_errors,
-                'tx_window_errors': net_stats.tx_window_errors,
+            get_process_info((struct process_info *)buffer, ((struct process_info *)buffer)->pid);
+            if (copy_to_user((void *)arg, buffer, buf_size))
+                retval = -EFAULT;
+            kfree(buffer);
+            break;
+            
+        case KAPI_EXECUTE_KERNEL_CMD:
+            buf_size = sizeof(struct kernel_cmd);
+            buffer = kmalloc(buf_size, GFP_KERNEL);
+            if (!buffer) {
+                retval = -ENOMEM;
+                break;
             }
-        except OSError as e:
-            raise RuntimeError(f"Failed to get network stats: {e}")
-
-    def get_filesystem_info(self):
-        """Get filesystem information"""
-        if not self.is_connected():
-            raise RuntimeError("Not connected to kernel driver")
-
-        fs_info = FilesystemInfo()
-        try:
-            fcntl.ioctl(self.device_fd, KAPI_GET_FILE_SYSTEM_INFO, fs_info)
-            return {
-                'fs_type': fs_info.fs_type.decode('utf-8').strip('\x00'),
-                'total_blocks': fs_info.total_blocks,
-                'free_blocks': fs_info.free_blocks,
-                'available_blocks': fs_info.available_blocks,
-                'total_inodes': fs_info.total_inodes,
-                'free_inodes': fs_info.free_inodes,
-                'block_size': fs_info.block_size,
-                'max_filename_len': fs_info.max_filename_len,
-                'mount_point': fs_info.mount_point.decode('utf-8').strip('\x00'),
-                'device_name': fs_info.device_name.decode('utf-8').strip('\x00'),
-                'flags': fs_info.flags,
+            if (copy_from_user(buffer, (void *)arg, buf_size)) {
+                retval = -EFAULT;
+                kfree(buffer);
+                break;
             }
-        except OSError as e:
-            raise RuntimeError(f"Failed to get filesystem info: {e}")
-
-    def get_load_average(self):
-        """Get system load average information"""
-        if not self.is_connected():
-            raise RuntimeError("Not connected to kernel driver")
-
-        load_info = LoadAvgInfo()
-        try:
-            fcntl.ioctl(self.device_fd, KAPI_GET_LOADAVG, load_info)
-            return {
-                'load1': load_info.load1 / 65536.0,  # Convert from fixed point
-                'load5': load_info.load5 / 65536.0,
-                'load15': load_info.load15 / 65536.0,
-                'running_tasks': load_info.running_tasks,
-                'total_tasks': load_info.total_tasks,
-                'last_pid': load_info.last_pid,
+            execute_kernel_command((struct kernel_cmd *)buffer);
+            if (copy_to_user((void *)arg, buffer, buf_size))
+                retval = -EFAULT;
+            kfree(buffer);
+            break;
+            
+        case KAPI_GET_NETWORK_STATS:
+            buf_size = sizeof(struct network_stats);
+            buffer = kmalloc(buf_size, GFP_KERNEL);
+            if (!buffer) {
+                retval = -ENOMEM;
+                break;
             }
-        except OSError as e:
-            raise RuntimeError(f"Failed to get load average: {e}")
-
-    def get_kernel_config(self):
-        """Get kernel configuration information"""
-        if not self.is_connected():
-            raise RuntimeError("Not connected to kernel driver")
-
-        config = KernelConfig()
-        try:
-            fcntl.ioctl(self.device_fd, KAPI_GET_KERNEL_CONFIG, config)
-            return {
-                'version': config.version.decode('utf-8').strip('\x00'),
-                'compile_time': config.compile_time.decode('utf-8').strip('\x00'),
-                'compile_by': config.compile_by.decode('utf-8').strip('\x00'),
-                'compile_host': config.compile_host.decode('utf-8').strip('\x00'),
-                'compiler': config.compiler.decode('utf-8').strip('\x00'),
-                'build_date': config.build_date.decode('utf-8').strip('\x00'),
-                'hz': config.hz,
-                'page_size': config.page_size,
-                'phys_addr_bits': config.phys_addr_bits,
-                'virt_addr_bits': config.virt_addr_bits,
-                'arch': config.arch.decode('utf-8').strip('\x00'),
+            get_network_stats((struct network_stats *)buffer);
+            if (copy_to_user((void *)arg, buffer, buf_size))
+                retval = -EFAULT;
+            kfree(buffer);
+            break;
+            
+        case KAPI_GET_FILE_SYSTEM_INFO:
+            buf_size = sizeof(struct filesystem_info);
+            buffer = kmalloc(buf_size, GFP_KERNEL);
+            if (!buffer) {
+                retval = -ENOMEM;
+                break;
             }
-        except OSError as e:
-            raise RuntimeError(f"Failed to get kernel config: {e}")
-
-    def send_netlink_message(self, message):
-        """Send a message via netlink"""
-        if not self.netlink_socket:
-            raise RuntimeError("Netlink socket not available")
-
-        try:
-            self.netlink_socket.send(message.encode('utf-8'))
-            response = self.netlink_socket.recv(1024)
-            return response.decode('utf-8')
-        except Exception as e:
-            raise RuntimeError(f"Netlink communication failed: {e}")
-
-    def write_shared_memory(self, data, offset=0):
-        """Write data to shared memory"""
-        if not self.shared_memory:
-            raise RuntimeError("Shared memory not available")
-
-        try:
-            self.shared_memory.seek(offset)
-            if isinstance(data, str):
-                self.shared_memory.write(data.encode('utf-8'))
-            else:
-                self.shared_memory.write(data)
-            self.shared_memory.flush()
-        except Exception as e:
-            raise RuntimeError(f"Failed to write to shared memory: {e}")
-
-    def read_shared_memory(self, size=None, offset=0):
-        """Read data from shared memory"""
-        if not self.shared_memory:
-            raise RuntimeError("Shared memory not available")
-
-        try:
-            self.shared_memory.seek(offset)
-            if size is None:
-                data = self.shared_memory.read()
-            else:
-                data = self.shared_memory.read(size)
-
-            return data.rstrip(b'\x00').decode('utf-8')
-        except Exception as e:
-            raise RuntimeError(f"Failed to read from shared memory: {e}")
-
-    def get_all_available_commands(self):
-        """Get list of all available kernel commands"""
-        commands = [
-            "get_kernel_version",
-            "get_uptime",
-            "get_hostname",
-            "get_domainname",
-            "get_total_memory",
-            "get_free_memory",
-            "get_cpu_count",
-            "get_page_size",
-            "get_hz",
-            "get_jiffies"
-        ]
-        return commands
-
-    def export_system_info(self, filename=None):
-        """Export comprehensive system information to JSON"""
-        if not filename:
-            filename = f"system_info_{int(time.time())}.json"
-
-        system_info = {
-            'timestamp': datetime.now().isoformat(),
-            'kernel_config': self.get_kernel_config(),
-            'memory_info': self.get_memory_info(),
-            'cpu_info': self.get_cpu_info(),
-            'load_average': self.get_load_average(),
-            'network_stats': self.get_network_stats(),
-            'filesystem_info': self.get_filesystem_info(),
-            'current_process': self.get_process_info(os.getpid()),
+            get_filesystem_info((struct filesystem_info *)buffer);
+            if (copy_to_user((void *)arg, buffer, buf_size))
+                retval = -EFAULT;
+            kfree(buffer);
+            break;
+            
+        case KAPI_GET_LOADAVG:
+            buf_size = sizeof(struct loadavg_info);
+            buffer = kmalloc(buf_size, GFP_KERNEL);
+            if (!buffer) {
+                retval = -ENOMEM;
+                break;
+            }
+            get_loadavg_info((struct loadavg_info *)buffer);
+            if (copy_to_user((void *)arg, buffer, buf_size))
+                retval = -EFAULT;
+            kfree(buffer);
+            break;
+            
+        case KAPI_GET_KERNEL_CONFIG:
+            buf_size = sizeof(struct kernel_config);
+            buffer = kmalloc(buf_size, GFP_KERNEL);
+            if (!buffer) {
+                retval = -ENOMEM;
+                break;
+            }
+            get_kernel_config((struct kernel_config *)buffer);
+            if (copy_to_user((void *)arg, buffer, buf_size))
+                retval = -EFAULT;
+            kfree(buffer);
+            break;
+            
+        // خطرناک: کنترل پروسه‌ها
+        case KAPI_KILL_PROCESS: {
+            struct process_control proc_ctrl;
+            if (copy_from_user(&proc_ctrl, (void *)arg, sizeof(proc_ctrl))) {
+                retval = -EFAULT;
+                break;
+            }
+            kill_process_by_pid(&proc_ctrl);
+            if (copy_to_user((void *)arg, &proc_ctrl, sizeof(proc_ctrl)))
+                retval = -EFAULT;
+            break;
         }
-
-        # Add kernel command results
-        system_info['kernel_commands'] = {}
-        for cmd in self.get_all_available_commands():
-            try:
-                result = self.execute_kernel_command(cmd)
-                system_info['kernel_commands'][cmd] = result
-            except Exception as e:
-                system_info['kernel_commands'][cmd] = {'error': str(e)}
-
-        with open(filename, 'w') as f:
-            json.dump(system_info, f, indent=2)
-
-        return filename
-
-    # 🔥 DANGEROUS CONTROL METHODS 🔥
-    # These methods can seriously damage your system!
-
-    def kill_process(self, pid, signal=9):
-        """⚠️ DANGEROUS: Kill a process with specified signal"""
-        if not self.is_connected():
-            raise RuntimeError("Not connected to kernel driver")
-
-        ctrl = ProcessControl()
-        ctrl.pid = pid
-        ctrl.signal = signal
-
-        try:
-            fcntl.ioctl(self.device_fd, KAPI_KILL_PROCESS, ctrl)
-            return {
-                'status': ctrl.status,
-                'message': ctrl.message.decode('utf-8').strip('\x00'),
+        
+        case KAPI_SUSPEND_PROCESS: {
+            struct process_control proc_ctrl;
+            if (copy_from_user(&proc_ctrl, (void *)arg, sizeof(proc_ctrl))) {
+                retval = -EFAULT;
+                break;
             }
-        except OSError as e:
-            raise RuntimeError(f"Failed to kill process: {e}")
-
-    def suspend_process(self, pid):
-        """⚠️ DANGEROUS: Suspend a process (SIGSTOP)"""
-        if not self.is_connected():
-            raise RuntimeError("Not connected to kernel driver")
-
-        ctrl = ProcessControl()
-        ctrl.pid = pid
-
-        try:
-            fcntl.ioctl(self.device_fd, KAPI_SUSPEND_PROCESS, ctrl)
-            return {
-                'status': ctrl.status,
-                'message': ctrl.message.decode('utf-8').strip('\x00'),
+            suspend_resume_process(&proc_ctrl, true);
+            if (copy_to_user((void *)arg, &proc_ctrl, sizeof(proc_ctrl)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        case KAPI_RESUME_PROCESS: {
+            struct process_control proc_ctrl;
+            if (copy_from_user(&proc_ctrl, (void *)arg, sizeof(proc_ctrl))) {
+                retval = -EFAULT;
+                break;
             }
-        except OSError as e:
-            raise RuntimeError(f"Failed to suspend process: {e}")
-
-    def resume_process(self, pid):
-        """⚠️ DANGEROUS: Resume a suspended process (SIGCONT)"""
-        if not self.is_connected():
-            raise RuntimeError("Not connected to kernel driver")
-
-        ctrl = ProcessControl()
-        ctrl.pid = pid
-
-        try:
-            fcntl.ioctl(self.device_fd, KAPI_RESUME_PROCESS, ctrl)
-            return {
-                'status': ctrl.status,
-                'message': ctrl.message.decode('utf-8').strip('\x00'),
+            suspend_resume_process(&proc_ctrl, false);
+            if (copy_to_user((void *)arg, &proc_ctrl, sizeof(proc_ctrl)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        // خطرناک: مدیریت ماژول‌ها
+        case KAPI_LOAD_MODULE: {
+            struct module_control mod_ctrl;
+            if (copy_from_user(&mod_ctrl, (void *)arg, sizeof(mod_ctrl))) {
+                retval = -EFAULT;
+                break;
             }
-        except OSError as e:
-            raise RuntimeError(f"Failed to resume process: {e}")
-
-    def load_kernel_module(self, path, params=""):
-        """⚠️ DANGEROUS: Load a kernel module"""
-        if not self.is_connected():
-            raise RuntimeError("Not connected to kernel driver")
-
-        ctrl = ModuleControl()
-        ctrl.path = path.encode('utf-8')
-        ctrl.params = params.encode('utf-8')
-
-        try:
-            fcntl.ioctl(self.device_fd, KAPI_LOAD_MODULE, ctrl)
-            return {
-                'status': ctrl.status,
-                'message': ctrl.message.decode('utf-8').strip('\x00'),
+            load_kernel_module(&mod_ctrl);
+            if (copy_to_user((void *)arg, &mod_ctrl, sizeof(mod_ctrl)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        case KAPI_UNLOAD_MODULE: {
+            struct module_control mod_ctrl;
+            if (copy_from_user(&mod_ctrl, (void *)arg, sizeof(mod_ctrl))) {
+                retval = -EFAULT;
+                break;
             }
-        except OSError as e:
-            raise RuntimeError(f"Failed to load module: {e}")
-
-    def unload_kernel_module(self, name):
-        """⚠️ DANGEROUS: Unload a kernel module"""
-        if not self.is_connected():
-            raise RuntimeError("Not connected to kernel driver")
-
-        ctrl = ModuleControl()
-        ctrl.name = name.encode('utf-8')
-
-        try:
-            fcntl.ioctl(self.device_fd, KAPI_UNLOAD_MODULE, ctrl)
-            return {
-                'status': ctrl.status,
-                'message': ctrl.message.decode('utf-8').strip('\x00'),
+            unload_kernel_module(&mod_ctrl);
+            if (copy_to_user((void *)arg, &mod_ctrl, sizeof(mod_ctrl)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        // خطرناک: شبکه
+        case KAPI_TOGGLE_INTERFACE: {
+            struct net_control net_ctrl;
+            if (copy_from_user(&net_ctrl, (void *)arg, sizeof(net_ctrl))) {
+                retval = -EFAULT;
+                break;
             }
-        except OSError as e:
-            raise RuntimeError(f"Failed to unload module: {e}")
-
-    def toggle_network_interface(self, interface, up=True):
-        """⚠️ DANGEROUS: Bring network interface up/down"""
-        if not self.is_connected():
-            raise RuntimeError("Not connected to kernel driver")
-
-        ctrl = NetControl()
-        ctrl.interface = interface.encode('utf-8')
-        ctrl.up = 1 if up else 0
-
-        try:
-            fcntl.ioctl(self.device_fd, KAPI_TOGGLE_INTERFACE, ctrl)
-            return {
-                'status': ctrl.status,
-                'message': ctrl.message.decode('utf-8').strip('\x00'),
+            toggle_network_interface(&net_ctrl);
+            if (copy_to_user((void *)arg, &net_ctrl, sizeof(net_ctrl)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        // خطرناک: فایل‌سیستم
+        case KAPI_MOUNT_FS: {
+            struct fs_control fs_ctrl;
+            if (copy_from_user(&fs_ctrl, (void *)arg, sizeof(fs_ctrl))) {
+                retval = -EFAULT;
+                break;
             }
-        except OSError as e:
-            raise RuntimeError(f"Failed to toggle interface: {e}")
-
-    def mount_filesystem(self, device, path, fs_type="ext4", options=""):
-        """⚠️ DANGEROUS: Mount a filesystem"""
-        if not self.is_connected():
-            raise RuntimeError("Not connected to kernel driver")
-
-        ctrl = FSControl()
-        ctrl.device = device.encode('utf-8')
-        ctrl.path = path.encode('utf-8')
-        ctrl.type = fs_type.encode('utf-8')
-        ctrl.options = options.encode('utf-8')
-
-        try:
-            fcntl.ioctl(self.device_fd, KAPI_MOUNT_FS, ctrl)
-            return {
-                'status': ctrl.status,
-                'message': ctrl.message.decode('utf-8').strip('\x00'),
+            mount_filesystem(&fs_ctrl);
+            if (copy_to_user((void *)arg, &fs_ctrl, sizeof(fs_ctrl)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        case KAPI_UMOUNT_FS: {
+            struct fs_control fs_ctrl;
+            if (copy_from_user(&fs_ctrl, (void *)arg, sizeof(fs_ctrl))) {
+                retval = -EFAULT;
+                break;
             }
-        except OSError as e:
-            raise RuntimeError(f"Failed to mount filesystem: {e}")
-
-    def unmount_filesystem(self, path):
-        """⚠️ DANGEROUS: Unmount a filesystem"""
-        if not self.is_connected():
-            raise RuntimeError("Not connected to kernel driver")
-
-        ctrl = FSControl()
-        ctrl.path = path.encode('utf-8')
-
-        try:
-            fcntl.ioctl(self.device_fd, KAPI_UMOUNT_FS, ctrl)
-            return {
-                'status': ctrl.status,
-                'message': ctrl.message.decode('utf-8').strip('\x00'),
+            unmount_filesystem(&fs_ctrl);
+            if (copy_to_user((void *)arg, &fs_ctrl, sizeof(fs_ctrl)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        // خطرناک: تزریق لاگ
+        case KAPI_INJECT_LOG: {
+            struct log_injection log_inj;
+            if (copy_from_user(&log_inj, (void *)arg, sizeof(log_inj))) {
+                retval = -EFAULT;
+                break;
             }
-        except OSError as e:
-            raise RuntimeError(f"Failed to unmount filesystem: {e}")
-
-    def inject_kernel_log(self, message, level="INFO"):
-        """⚠️ DANGEROUS: Inject a custom log message into kernel log"""
-        if not self.is_connected():
-            raise RuntimeError("Not connected to kernel driver")
-
-        log_inj = LogInjection()
-        log_inj.level = level.encode('utf-8')
-        log_inj.message = message.encode('utf-8')
-
-        try:
-            fcntl.ioctl(self.device_fd, KAPI_INJECT_LOG, log_inj)
-            return {
-                'status': log_inj.status,
+            inject_kernel_log(&log_inj);
+            if (copy_to_user((void *)arg, &log_inj, sizeof(log_inj)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        // خطرناک: فورس memory reclaim
+        case KAPI_FORCE_PAGE_RECLAIM:
+            retval = force_memory_reclaim();
+            break;
+            
+        // خطرناک: CPU affinity
+        case KAPI_SET_CPU_AFFINITY: {
+            struct cpu_control cpu_ctrl;
+            if (copy_from_user(&cpu_ctrl, (void *)arg, sizeof(cpu_ctrl))) {
+                retval = -EFAULT;
+                break;
             }
-        except OSError as e:
-            raise RuntimeError(f"Failed to inject log: {e}")
+            set_process_cpu_affinity(&cpu_ctrl);
+            if (copy_to_user((void *)arg, &cpu_ctrl, sizeof(cpu_ctrl)))
+                retval = -EFAULT;
+            break;
+        }
+        
+        // خطرناک ترین: Kernel Panic! 💀
+        case KAPI_PANIC_KERNEL:
+            printk(KERN_CRIT "KAPI: User requested kernel panic! System going down...\n");
+            trigger_kernel_panic();
+            break; // هرگز اینجا نمی‌رسه 😅
+            
+        default:
+            retval = -ENOTTY;
+    }
+    
+    return retval;
+}
 
-    def force_memory_reclaim(self):
-        """💀 EXTREMELY DANGEROUS: Force kernel memory reclaim (may hang system!)"""
-        if not self.is_connected():
-            raise RuntimeError("Not connected to kernel driver")
+static int device_mmap(struct file *file, struct vm_area_struct *vma)
+{
+    unsigned long size = vma->vm_end - vma->vm_start;
+    unsigned long pfn;
+    unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
+    
+    printk(KERN_INFO "KAPI: mmap called, size: %lu, offset: %lu, buffer_size: %zu\n", 
+           size, offset, buffer_size);
+    
+    // Check if size is reasonable and aligned
+    if (size > buffer_size || size == 0) {
+        printk(KERN_ERR "KAPI: Invalid mmap size %lu (buffer_size: %zu)\n", size, buffer_size);
+        return -EINVAL;
+    }
+    
+    if (!shared_buffer) {
+        printk(KERN_ERR "KAPI: shared_buffer is NULL\n");
+        return -ENOMEM;
+    }
+    
+    // Round up size to page boundary
+    size = PAGE_ALIGN(size);
+    
+    pfn = shared_buffer_phys >> PAGE_SHIFT;
+    printk(KERN_INFO "KAPI: Mapping phys: 0x%lx, pfn: 0x%lx, aligned_size: %lu\n", 
+           shared_buffer_phys, pfn, size);
+    
+    // Set VMA flags for proper memory mapping
+    vma->vm_flags |= VM_IO | VM_DONTEXPAND | VM_DONTDUMP;
+    
+    // Use uncached memory for consistent data sharing
+    vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+    
+    // Map the physical memory to user space
+    if (remap_pfn_range(vma, vma->vm_start, pfn, size, vma->vm_page_prot)) {
+        printk(KERN_ERR "KAPI: remap_pfn_range failed for pfn: 0x%lx, size: %lu\n", pfn, size);
+        return -EAGAIN;
+    }
+    
+    printk(KERN_INFO "KAPI: Memory mapped successfully, size: %lu, pfn: 0x%lx\n", size, pfn);
+    return 0;
+}
 
-        print("⚠️ WARNING: This operation may cause system instability!")
-        try:
-            fcntl.ioctl(self.device_fd, KAPI_FORCE_PAGE_RECLAIM)
-            return {'status': 0}
-        except OSError as e:
-            raise RuntimeError(f"Failed to force memory reclaim: {e}")
+static int device_release(struct inode *inodep, struct file *filep)
+{
+    printk(KERN_INFO "KAPI: Device closed by PID %d\n", current->pid);
+    return 0;
+}
 
-    def set_cpu_affinity(self, pid, cpu_mask):
-        """⚠️ DANGEROUS: Set CPU affinity for a process"""
-        if not self.is_connected():
-            raise RuntimeError("Not connected to kernel driver")
+// Netlink functions
+static void netlink_recv_msg(struct sk_buff *skb)
+{
+    struct nlmsghdr *nlh;
+    int pid;
+    struct sk_buff *skb_out;
+    int msg_size;
+    char *msg = "Hello from kernel - KAPI driver loaded successfully";
+    int res;
+    char *received_msg;
+    
+    if (!skb) {
+        printk(KERN_ERR "KAPI: Received NULL skb\n");
+        return;
+    }
+    
+    nlh = nlmsg_hdr(skb);
+    if (!nlh) {
+        printk(KERN_ERR "KAPI: Invalid netlink header\n");
+        return;
+    }
+    
+    pid = nlh->nlmsg_pid;
+    received_msg = (char *)nlmsg_data(nlh);
+    
+    printk(KERN_INFO "KAPI: Netlink message received from PID %d: '%s'\n", 
+           pid, received_msg ? received_msg : "NULL");
+    
+    msg_size = strlen(msg) + 1; // Include null terminator
+    skb_out = nlmsg_new(NLMSG_ALIGN(msg_size), GFP_KERNEL);
+    
+    if (!skb_out) {
+        printk(KERN_ERR "KAPI: Failed to allocate new skb\n");
+        return;
+    }
+    
+    nlh = nlmsg_put(skb_out, 0, 0, NLMSG_DONE, msg_size, 0);
+    if (!nlh) {
+        printk(KERN_ERR "KAPI: Failed to put netlink message\n");
+        kfree_skb(skb_out);
+        return;
+    }
+    
+    NETLINK_CB(skb_out).dst_group = 0;
+    strcpy(nlmsg_data(nlh), msg);
+    
+    res = nlmsg_unicast(netlink_sock, skb_out, pid);
+    if (res < 0) {
+        printk(KERN_ERR "KAPI: Error %d while sending back to user PID %d\n", res, pid);
+    } else {
+        printk(KERN_INFO "KAPI: Successfully sent netlink response to PID %d\n", pid);
+    }
+}
 
-        ctrl = CPUControl()
-        ctrl.pid = pid
-        ctrl.mask = cpu_mask
+static struct netlink_kernel_cfg cfg = {
+    .input = netlink_recv_msg,
+};
 
-        try:
-            fcntl.ioctl(self.device_fd, KAPI_SET_CPU_AFFINITY, ctrl)
-            return {
-                'status': ctrl.status,
-                'message': ctrl.message.decode('utf-8').strip('\x00'),
+// Module initialization
+static int __init kapi_init(void)
+{
+    printk(KERN_INFO "KAPI: Initializing Kernel API Exporter v2.0\n");
+    printk(KERN_INFO "KAPI: Kernel version: %s\n", init_uts_ns.name.release);
+    printk(KERN_INFO "KAPI: Architecture: %s\n", init_uts_ns.name.machine);
+    
+    // Ensure buffer size is page-aligned
+    buffer_size = PAGE_ALIGN(buffer_size);
+    
+    // Allocate shared buffer using __get_free_pages for proper alignment
+    shared_buffer = (void *)__get_free_pages(GFP_KERNEL | __GFP_ZERO, get_order(buffer_size));
+    if (!shared_buffer) {
+        printk(KERN_ALERT "KAPI: Failed to allocate shared buffer\n");
+        return -ENOMEM;
+    }
+    shared_buffer_phys = virt_to_phys(shared_buffer);
+    
+    // Verify alignment
+    if (shared_buffer_phys & (PAGE_SIZE - 1)) {
+        printk(KERN_ALERT "KAPI: Buffer not page aligned! phys: 0x%lx\n", shared_buffer_phys);
+        free_pages((unsigned long)shared_buffer, get_order(buffer_size));
+        return -ENOMEM;
+    }
+    
+    // Mark pages as reserved to prevent swapping
+    {
+        int i;
+        unsigned long addr = (unsigned long)shared_buffer;
+        for (i = 0; i < (buffer_size >> PAGE_SHIFT); i++) {
+            SetPageReserved(virt_to_page(addr));
+            addr += PAGE_SIZE;
+        }
+    }
+    
+    printk(KERN_INFO "KAPI: Allocated %zu bytes for shared buffer at virt: %p, phys: 0x%lx\n", 
+           buffer_size, shared_buffer, shared_buffer_phys);
+    
+    // Register character device
+    major_number = register_chrdev(0, DEVICE_NAME, &fops);
+    if (major_number < 0) {
+        printk(KERN_ALERT "KAPI: Failed to register character device\n");
+        kfree(shared_buffer);
+        return major_number;
+    }
+    printk(KERN_INFO "KAPI: Registered character device with major number %d\n", major_number);
+    
+    // Create device class - Fixed for kernel 6.x
+    kapi_class = class_create(CLASS_NAME);
+    if (IS_ERR(kapi_class)) {
+        unregister_chrdev(major_number, DEVICE_NAME);
+        kfree(shared_buffer);
+        printk(KERN_ALERT "KAPI: Failed to create device class\n");
+        return PTR_ERR(kapi_class);
+    }
+    printk(KERN_INFO "KAPI: Device class created successfully\n");
+    
+    // Create device
+    kapi_device = device_create(kapi_class, NULL, MKDEV(major_number, 0), NULL, DEVICE_NAME);
+    if (IS_ERR(kapi_device)) {
+        class_destroy(kapi_class);
+        unregister_chrdev(major_number, DEVICE_NAME);
+        kfree(shared_buffer);
+        printk(KERN_ALERT "KAPI: Failed to create device\n");
+        return PTR_ERR(kapi_device);
+    }
+    printk(KERN_INFO "KAPI: Device created at /dev/%s\n", DEVICE_NAME);
+    
+    // Create netlink socket
+    netlink_sock = netlink_kernel_create(&init_net, NETLINK_USER, &cfg);
+    if (!netlink_sock) {
+        printk(KERN_ALERT "KAPI: Error creating netlink socket\n");
+        device_destroy(kapi_class, MKDEV(major_number, 0));
+        class_destroy(kapi_class);
+        unregister_chrdev(major_number, DEVICE_NAME);
+        kfree(shared_buffer);
+        return -ENOMEM;
+    }
+    printk(KERN_INFO "KAPI: Netlink socket created successfully\n");
+    
+    printk(KERN_INFO "KAPI: Kernel API Exporter loaded successfully!\n");
+    printk(KERN_INFO "KAPI: CPU count: %d online, %d total\n", num_online_cpus(), num_possible_cpus());
+    printk(KERN_INFO "KAPI: Page size: %lu bytes\n", PAGE_SIZE);
+    printk(KERN_INFO "KAPI: HZ: %d\n", HZ);
+    
+    return 0;
+}
+
+// Module cleanup
+static void __exit kapi_exit(void)
+{
+    printk(KERN_INFO "KAPI: Shutting down Kernel API Exporter\n");
+    
+    if (netlink_sock) {
+        netlink_kernel_release(netlink_sock);
+        printk(KERN_INFO "KAPI: Netlink socket released\n");
+    }
+    
+    if (kapi_device) {
+        device_destroy(kapi_class, MKDEV(major_number, 0));
+        printk(KERN_INFO "KAPI: Device destroyed\n");
+    }
+    
+    if (kapi_class) {
+        class_destroy(kapi_class);
+        printk(KERN_INFO "KAPI: Device class destroyed\n");
+    }
+    
+    if (major_number >= 0) {
+        unregister_chrdev(major_number, DEVICE_NAME);
+        printk(KERN_INFO "KAPI: Character device unregistered\n");
+    }
+    
+    if (shared_buffer) {
+        // Unreserve pages before freeing
+        {
+            int i;
+            unsigned long addr = (unsigned long)shared_buffer;
+            for (i = 0; i < (buffer_size >> PAGE_SHIFT); i++) {
+                ClearPageReserved(virt_to_page(addr));
+                addr += PAGE_SIZE;
             }
-        except OSError as e:
-            raise RuntimeError(f"Failed to set CPU affinity: {e}")
+        }
+        free_pages((unsigned long)shared_buffer, get_order(buffer_size));
+        printk(KERN_INFO "KAPI: Shared buffer freed\n");
+    }
+    
+    printk(KERN_INFO "KAPI: Kernel API Exporter unloaded successfully\n");
+}
 
-    def panic_kernel(self):
-        """💀💀💀 EXTREMELY DANGEROUS: Trigger kernel panic! WILL CRASH SYSTEM! 💀💀💀"""
-        if not self.is_connected():
-            raise RuntimeError("Not connected to kernel driver")
+module_init(kapi_init);
+module_exit(kapi_exit);
 
-        print("💀💀💀 WARNING: THIS WILL CRASH THE ENTIRE SYSTEM! 💀💀💀")
-        print("Are you absolutely sure? This is irreversible!")
-
-        try:
-            fcntl.ioctl(self.device_fd, KAPI_PANIC_KERNEL)
-            # This line will never be reached
-            return {'status': 0}
-        except OSError as e:
-            raise RuntimeError(f"Failed to panic kernel: {e}")
-
-    def get_dangerous_commands(self):
-        """Get list of dangerous commands available"""
-        return [
-            "kill_process",
-            "suspend_process",
-            "resume_process",
-            "load_kernel_module",
-            "unload_kernel_module",
-            "toggle_network_interface",
-            "mount_filesystem",
-            "unmount_filesystem",
-            "inject_kernel_log",
-            "force_memory_reclaim",
-            "set_cpu_affinity",
-            "panic_kernel"  # 💀
-        ]
-
-def format_bytes(bytes_value):
-    """Format bytes to human readable format"""
-    if bytes_value == 0:
-        return "0 B"
-    for unit in ['B', 'KB', 'MB', 'GB', 'TB', 'PB']:
-        if bytes_value < 1024.0:
-            return f"{bytes_value:.2f} {unit}"
-        bytes_value /= 1024.0
-    return f"{bytes_value:.2f} EB"
-
-def format_time(seconds):
-    """Format seconds to human readable format"""
-    if seconds < 60:
-        return f"{seconds} seconds"
-    elif seconds < 3600:
-        return f"{seconds//60} minutes, {seconds%60} seconds"
-    elif seconds < 86400:
-        hours = seconds // 3600
-        minutes = (seconds % 3600) // 60
-        return f"{hours} hours, {minutes} minutes"
-    else:
-        days = seconds // 86400
-        hours = (seconds % 86400) // 3600
-        return f"{days} days, {hours} hours"
-
-def print_header(title):
-    """Print a formatted header"""
-    print(f"\n{'='*60}")
-    print(f"  {title}")
-    print(f"{'='*60}")
-
-def print_section(title):
-    """Print a formatted section header"""
-    print(f"\n--- {title} ---")
-
-def main():
-    """Main function demonstrating the enhanced API usage"""
-    client = KernelAPIClient()
-
-    print("🚀 Kernel API Client v2.0 - Advanced System Monitor")
-    print("=" * 60)
-
-    # Connect to kernel driver
-    if not client.connect():
-        print("❌ Failed to connect to kernel driver")
-        print("\nMake sure to:")
-        print("1. Load the kernel module: sudo make -f Makefile.kernel load")
-        print("2. Set permissions: sudo chmod 666 /dev/kernel_api_exporter")
-        return 1
-
-    try:
-        # Test kernel configuration
-        print_header("KERNEL CONFIGURATION")
-        config = client.get_kernel_config()
-        print(f"Kernel Version: {config['version']}")
-        print(f"Architecture: {config['arch']}")
-        print(f"Page Size: {format_bytes(config['page_size'])}")
-        print(f"HZ: {config['hz']}")
-        print(f"Compiler: {config['compiler']}")
-        print(f"Build Date: {config['build_date']}")
-
-        # Test memory information
-        print_header("MEMORY INFORMATION")
-        mem_info = client.get_memory_info()
-        print(f"Total RAM: {format_bytes(mem_info['total_ram'])}")
-        print(f"Free RAM: {format_bytes(mem_info['free_ram'])}")
-        print(f"Used RAM: {format_bytes(mem_info['used_ram'])}")
-        print(f"Buffers: {format_bytes(mem_info['buffers'])}")
-        print(f"Cached: {format_bytes(mem_info['cached'])}")
-        print(f"Swap Total: {format_bytes(mem_info['swap_total'])}")
-        print(f"Swap Free: {format_bytes(mem_info['swap_free'])}")
-        print(f"Slab: {format_bytes(mem_info['slab'])}")
-        print(f"Dirty Pages: {format_bytes(mem_info['dirty'])}")
-        print(f"Mapped: {format_bytes(mem_info['mapped'])}")
-
-        # Test CPU information
-        print_header("CPU INFORMATION")
-        cpu_info = client.get_cpu_info()
-        print(f"CPU Model: {cpu_info['cpu_model']}")
-        print(f"Vendor ID: {cpu_info['vendor_id']}")
-        print(f"CPU Family: {cpu_info['cpu_family']}")
-        print(f"Total CPUs: {cpu_info['num_cpus']}")
-        print(f"Online CPUs: {cpu_info['num_online_cpus']}")
-        print(f"Cache Alignment: {cpu_info['cache_alignment']} bytes")
-        print(f"System Uptime: {format_time(cpu_info['uptime'])}")
-
-        # Test load average
-        print_header("SYSTEM LOAD")
-        load = client.get_load_average()
-        print(f"Load Average: {load['load1']:.2f} {load['load5']:.2f} {load['load15']:.2f}")
-        print(f"Running Tasks: {load['running_tasks']}")
-        print(f"Total Tasks: {load['total_tasks']}")
-
-        # Test process information
-        print_header("CURRENT PROCESS INFORMATION")
-        current_pid = os.getpid()
-        proc_info = client.get_process_info(current_pid)
-        if proc_info:
-            print(f"PID: {proc_info['pid']}")
-            print(f"Command: {proc_info['comm']}")
-            print(f"Parent PID: {proc_info['ppid']}")
-            print(f"Memory Usage: {format_bytes(proc_info['memory_usage'])}")
-            print(f"Virtual Size: {format_bytes(proc_info['vsize'])}")
-            print(f"RSS: {proc_info['rss']} pages")
-            print(f"Number of Threads: {proc_info['num_threads']}")
-            print(f"Process State: {proc_info['state']}")
-            print(f"Nice Value: {proc_info['nice']}")
-            print(f"Priority: {proc_info['priority']}")
-        else:
-            print(f"Process {current_pid} not found")
-
-        # Test kernel commands
-        print_header("KERNEL COMMANDS")
-        commands = client.get_all_available_commands()
-        for cmd in commands:
-            try:
-                result = client.execute_kernel_command(cmd)
-                print(f"{cmd}: {result['result']}")
-            except Exception as e:
-                print(f"{cmd}: ERROR - {e}")
-
-        # Test network statistics
-        print_header("NETWORK STATISTICS")
-        net_stats = client.get_network_stats()
-        print(f"RX Packets: {net_stats['rx_packets']:,}")
-        print(f"TX Packets: {net_stats['tx_packets']:,}")
-        print(f"RX Bytes: {format_bytes(net_stats['rx_bytes'])}")
-        print(f"TX Bytes: {format_bytes(net_stats['tx_bytes'])}")
-        print(f"RX Errors: {net_stats['rx_errors']}")
-        print(f"TX Errors: {net_stats['tx_errors']}")
-        print(f"RX Dropped: {net_stats['rx_dropped']}")
-        print(f"TX Dropped: {net_stats['tx_dropped']}")
-
-        # Test filesystem information
-        print_header("FILESYSTEM INFORMATION")
-        fs_info = client.get_filesystem_info()
-        print(f"Filesystem Type: {fs_info['fs_type']}")
-        print(f"Mount Point: {fs_info['mount_point']}")
-        print(f"Device: {fs_info['device_name']}")
-        print(f"Total Blocks: {fs_info['total_blocks']:,}")
-        print(f"Free Blocks: {fs_info['free_blocks']:,}")
-        print(f"Block Size: {format_bytes(fs_info['block_size'])}")
-        print(f"Total Inodes: {fs_info['total_inodes']:,}")
-        print(f"Free Inodes: {fs_info['free_inodes']:,}")
-
-        # Test shared memory
-        print_header("SHARED MEMORY TEST")
-        if client.shared_memory:
-            try:
-                test_data = f"Test data from PID {os.getpid()} at {datetime.now()}"
-                client.write_shared_memory(test_data)
-                read_data = client.read_shared_memory()
-                print(f"Written: {test_data}")
-                print(f"Read: {read_data}")
-                print("✓ Shared memory working correctly")
-            except Exception as e:
-                print(f"❌ Shared memory test failed: {e}")
-        else:
-            print("⚠ Shared memory not available - skipping test")
-
-        # Test netlink communication
-        print_header("NETLINK COMMUNICATION TEST")
-        try:
-            response = client.send_netlink_message("Hello from userland!")
-            print(f"Netlink response: {response}")
-        except Exception as e:
-            print(f"⚠ Netlink test failed: {e}")
-
-        # Export system information
-        print_header("SYSTEM INFORMATION EXPORT")
-        export_file = client.export_system_info()
-        print(f"✓ System information exported to: {export_file}")
-
-        # 🔥 DANGEROUS FUNCTIONS DEMO (BE CAREFUL!)
-        print_header("DANGEROUS FUNCTIONS AVAILABLE")
-        dangerous_cmds = client.get_dangerous_commands()
-        print("⚠️ Available dangerous functions (use with extreme caution!):")
-        for i, cmd in enumerate(dangerous_cmds, 1):
-            danger_level = "💀💀💀" if cmd == "panic_kernel" else "💀" if cmd == "force_memory_reclaim" else "⚠️"
-            print(f"{i:2d}. {danger_level} {cmd}")
-
-        print("\n🔥 Safe demonstration of log injection:")
-        try:
-            result = client.inject_kernel_log("Hello from KAPI Python client!", "INFO")
-            print(f"✓ Log injected successfully (check dmesg)")
-        except Exception as e:
-            print(f"⚠ Log injection failed: {e}")
-
-        print("\n⚠️ NOTE: Other dangerous functions are available but not demonstrated")
-        print("    for safety reasons. Use them only if you know what you're doing!")
-
-    except Exception as e:
-        print(f"❌ Error during API testing: {e}")
-        return 1
-
-    finally:
-        client.disconnect()
-
-    print_header("DEMO COMPLETED SUCCESSFULLY")
-    print("🎉 All kernel API functions tested successfully!")
-    print("💡 To see injected log: dmesg | grep KAPI_INJECT")
-    return 0
-
-if __name__ == "__main__":
-    sys.exit(main())
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("KAPI Development Team");
+MODULE_DESCRIPTION("Advanced Kernel API Exporter for Linux 6.x - Exports kernel functions to userland");
+MODULE_VERSION("2.0");
+MODULE_ALIAS("kapi");
